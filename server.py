@@ -3,7 +3,7 @@ bd-mcp: MCP server wrapping the basedosdados GraphQL backend.
 
 Credentials (in priority order):
   1. Env vars: BD_EMAIL and BD_PASSWORD
-  2. ~/.basedosdados/bd_credentials.json: {"email": "...", "password": "..."}
+  2. ~/.basedosdados/bd_credentials.json: {"dev": {"email": ..., "password": ...}, "prod": {...}}
 
 Environment:
   BD_ENV=dev (default) or BD_ENV=prod
@@ -55,7 +55,15 @@ _cache: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 
-def _get_credentials() -> tuple[str, str]:
+def _get_credentials(env: str) -> tuple[str, str]:
+    """
+    Return (email, password) for the given environment.
+
+    Lookup order:
+      1. Env vars BD_EMAIL / BD_PASSWORD (environment-agnostic override)
+      2. ~/.basedosdados/bd_credentials.json under key "dev" or "prod"
+         Falls back to flat {"email", "password"} structure for compatibility.
+    """
     email = os.environ.get("BD_EMAIL")
     password = os.environ.get("BD_PASSWORD")
     if email and password:
@@ -64,12 +72,16 @@ def _get_credentials() -> tuple[str, str]:
     creds_path = Path.home() / ".basedosdados" / "bd_credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
-        return data["email"], data["password"]
+        if env in data:
+            return data[env]["email"], data[env]["password"]
+        if "email" in data:  # flat fallback
+            return data["email"], data["password"]
 
     raise RuntimeError(
-        "No credentials found. Set BD_EMAIL / BD_PASSWORD env vars "
-        "or create ~/.basedosdados/bd_credentials.json with "
-        '{"email": "...", "password": "..."}'
+        f"No credentials found for env='{env}'. "
+        "Set BD_EMAIL / BD_PASSWORD env vars or create "
+        "~/.basedosdados/bd_credentials.json with "
+        '{"dev": {"email": "...", "password": "..."}, "prod": {...}}'
     )
 
 
@@ -83,7 +95,7 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
     if _cache["token"] and _cache["expires_at"] > now and _cache["env"] == env:
         return _cache["token"], URLS[env]
 
-    email, password = _get_credentials()
+    email, password = _get_credentials(env)
     base_url = URLS[env]
     r = requests.post(
         f"{base_url}/graphql",
@@ -180,7 +192,7 @@ def db_auth(env: str = "dev") -> dict:
     Authenticate to the basedosdados backend.
 
     Reads credentials from BD_EMAIL/BD_PASSWORD env vars or
-    ~/.basedosdados/bd_credentials.json. Token is cached for 24 hours.
+    ~/.basedosdados/bd_credentials.json (keyed by env). Token is cached for 24 hours.
 
     Args:
         env: "dev" or "prod" (default: "dev", overridden by BD_ENV env var)
