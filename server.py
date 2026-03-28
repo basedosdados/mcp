@@ -21,11 +21,11 @@ import requests
 from fastmcp import FastMCP
 
 mcp = FastMCP(
-    "bd-mcp",
+    "databasis-mcp",
     instructions=(
-        "Tools for interacting with the basedosdados backend API. "
+        "Tools for interacting with the Data Basis backend API. "
         "All write tools are idempotent: pass an existing id to update, "
-        "omit it to create. Always call db_auth first or rely on auto-auth."
+        "omit it to create. Always call auth first or rely on auto-auth."
     ),
 )
 
@@ -187,7 +187,7 @@ def _fetch_all(token_env: str, query_name: str, fields: str) -> list[dict]:
 
 
 @mcp.tool()
-def db_auth(env: str = "dev") -> dict:
+def auth(env: str = "dev") -> dict:
     """
     Authenticate to the basedosdados backend.
 
@@ -205,7 +205,7 @@ def db_auth(env: str = "dev") -> dict:
 
 
 @mcp.tool()
-def db_discover_ids(env: str = "dev") -> dict:
+def discover_ids(env: str = "dev") -> dict:
     """
     Fetch and return all reference IDs needed for metadata creation.
 
@@ -272,7 +272,7 @@ def db_discover_ids(env: str = "dev") -> dict:
 
 
 @mcp.tool()
-def db_get_dataset(slug: str, env: str = "dev") -> dict:
+def get_dataset(slug: str, env: str = "dev") -> dict:
     """
     Fetch a dataset by slug and return its full metadata.
 
@@ -399,7 +399,7 @@ def db_get_dataset(slug: str, env: str = "dev") -> dict:
 
 
 @mcp.tool()
-def db_create_update_dataset(
+def create_update_dataset(
     slug: str,
     name_pt: str,
     name_en: str,
@@ -447,7 +447,7 @@ def db_create_update_dataset(
 
 
 @mcp.tool()
-def db_create_update_table(
+def create_update_table(
     slug: str,
     name_pt: str,
     name_en: str,
@@ -495,7 +495,7 @@ def db_create_update_table(
 
 
 @mcp.tool()
-def db_upload_columns(
+def upload_columns(
     table_id: str,
     dataset_id: str,
     architecture_url: str,
@@ -539,7 +539,7 @@ def db_upload_columns(
 
 
 @mcp.tool()
-def db_update_column(
+def update_column(
     column_id: str,
     column_name: str,
     table_id: str,
@@ -608,7 +608,7 @@ def db_update_column(
 
 
 @mcp.tool()
-def db_delete_column(
+def delete_column(
     column_id: str,
     env: str = "dev",
 ) -> dict:
@@ -636,7 +636,7 @@ def db_delete_column(
 
 
 @mcp.tool()
-def db_create_update_observation_level(
+def create_update_observation_level(
     table_id: str,
     entity_id: str,
     id: str | None = None,
@@ -667,7 +667,7 @@ def db_create_update_observation_level(
 
 
 @mcp.tool()
-def db_create_update_cloud_table(
+def create_update_cloud_table(
     table_id: str,
     gcp_project_id: str,
     gcp_dataset_id: str,
@@ -707,7 +707,7 @@ def db_create_update_cloud_table(
 
 
 @mcp.tool()
-def db_create_update_coverage(
+def create_update_coverage(
     table_id: str,
     area_id: str,
     id: str | None = None,
@@ -738,7 +738,7 @@ def db_create_update_coverage(
 
 
 @mcp.tool()
-def db_create_update_datetime_range(
+def create_update_datetime_range(
     coverage_id: str,
     start_year: int,
     end_year: int,
@@ -781,7 +781,7 @@ def db_create_update_datetime_range(
 
 
 @mcp.tool()
-def db_create_update_update(
+def create_update_update(
     table_id: str,
     entity_id: str,
     frequency: int,
@@ -824,7 +824,7 @@ def db_create_update_update(
 
 
 @mcp.tool()
-def db_get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
+def get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
     """
     Return raw data sources associated with a dataset.
 
@@ -856,7 +856,7 @@ def db_get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
 
 
 @mcp.tool()
-def db_get_authenticated_account(env: str = "dev") -> dict:
+def get_authenticated_account(env: str = "dev") -> dict:
     """
     Return the ID and email of the currently authenticated account.
 
