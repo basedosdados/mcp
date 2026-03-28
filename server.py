@@ -1,12 +1,12 @@
 """
-bd-mcp: MCP server wrapping the basedosdados GraphQL backend.
+databasis-mcp: MCP server wrapping the Data Basis GraphQL backend.
 
 Credentials (in priority order):
-  1. Env vars: BD_EMAIL and BD_PASSWORD
-  2. ~/.basedosdados/bd_credentials.json: {"dev": {"email": ..., "password": ...}, "prod": {...}}
+  1. Env vars: EMAIL and PASSWORD
+  2. ~/.basedosdados/backend_credentials.json: {"dev": {"email": ..., "password": ...}, "prod": {...}}
 
 Environment:
-  BD_ENV=dev (default) or BD_ENV=prod
+  ENV=dev (default) or ENV=prod
 
 Token is cached in memory for 24 hours.
 """
@@ -60,16 +60,16 @@ def _get_credentials(env: str) -> tuple[str, str]:
     Return (email, password) for the given environment.
 
     Lookup order:
-      1. Env vars BD_EMAIL / BD_PASSWORD (environment-agnostic override)
-      2. ~/.basedosdados/bd_credentials.json under key "dev" or "prod"
+      1. Env vars EMAIL / PASSWORD (environment-agnostic override)
+      2. ~/.basedosdados/backend_credentials.json under key "dev" or "prod"
          Falls back to flat {"email", "password"} structure for compatibility.
     """
-    email = os.environ.get("BD_EMAIL")
-    password = os.environ.get("BD_PASSWORD")
+    email = os.environ.get("EMAIL")
+    password = os.environ.get("PASSWORD")
     if email and password:
         return email, password
 
-    creds_path = Path.home() / ".basedosdados" / "bd_credentials.json"
+    creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
         if env in data:
@@ -79,15 +79,15 @@ def _get_credentials(env: str) -> tuple[str, str]:
 
     raise RuntimeError(
         f"No credentials found for env='{env}'. "
-        "Set BD_EMAIL / BD_PASSWORD env vars or create "
-        "~/.basedosdados/bd_credentials.json with "
+        "Set EMAIL / PASSWORD env vars or create "
+        "~/.basedosdados/backend_credentials.json with "
         '{"dev": {"email": "...", "password": "..."}, "prod": {...}}'
     )
 
 
 def _get_token(env: str | None = None) -> tuple[str, str]:
     """Return (token, base_url), refreshing if expired."""
-    env = env or os.environ.get("BD_ENV", "dev")
+    env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
         raise ValueError(f"env must be 'dev' or 'prod', got: {env!r}")
 
@@ -189,13 +189,13 @@ def _fetch_all(token_env: str, query_name: str, fields: str) -> list[dict]:
 @mcp.tool()
 def auth(env: str = "dev") -> dict:
     """
-    Authenticate to the basedosdados backend.
+    Authenticate to the Data Basis backend.
 
-    Reads credentials from BD_EMAIL/BD_PASSWORD env vars or
-    ~/.basedosdados/bd_credentials.json (keyed by env). Token is cached for 24 hours.
+    Reads credentials from EMAIL/PASSWORD env vars or
+    ~/.basedosdados/backend_credentials.json (keyed by env). Token is cached for 24 hours.
 
     Args:
-        env: "dev" or "prod" (default: "dev", overridden by BD_ENV env var)
+        env: "dev" or "prod" (default: "dev", overridden by ENV env var)
 
     Returns:
         {"authenticated": True, "env": env, "base_url": url}
