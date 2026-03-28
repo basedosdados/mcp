@@ -834,7 +834,7 @@ def db_get_authenticated_account(env: str = "dev") -> dict:
 
     Returns: {"id": str, "email": str}
     """
-    email, _ = _get_credentials()
+    email, _ = _get_credentials(env)
     data = _gql(
         '{ allAccount(first: 500) { edges { node { id email } } } }',
         env=env,
