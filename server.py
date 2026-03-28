@@ -608,6 +608,34 @@ def db_update_column(
 
 
 @mcp.tool()
+def db_delete_column(
+    column_id: str,
+    env: str = "dev",
+) -> dict:
+    """
+    Delete a column record from a table.
+
+    Args:
+        column_id: bare column ID (UUID)
+        env: "dev" or "prod"
+
+    Returns: {"deleted": True, "id": str}
+    """
+    q = """
+    mutation($id: UUID!) {
+        DeleteColumn(id: $id) {
+            errors { field messages }
+        }
+    }
+    """
+    result = _gql(q, {"id": column_id}, env=env)
+    payload = result["DeleteColumn"]
+    if payload and payload.get("errors"):
+        raise RuntimeError(f"DeleteColumn errors: {payload['errors']}")
+    return {"deleted": True, "id": column_id}
+
+
+@mcp.tool()
 def db_create_update_observation_level(
     table_id: str,
     entity_id: str,
