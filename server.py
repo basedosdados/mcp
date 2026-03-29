@@ -205,70 +205,105 @@ def auth(env: str = "dev") -> dict:
 
 
 @mcp.tool()
-def discover_ids(env: str = "dev") -> dict:
+def discover_ids(
+    env: str = "dev",
+    keys: list[str] | None = None,
+) -> dict:
     """
-    Fetch and return all reference IDs needed for metadata creation.
+    Fetch and return reference IDs needed for metadata creation.
 
-    Returns a dict with keys:
-      status, bigquery_type, entity, area, license, availability, organization
-
-    Each value is a dict mapping slug/name → bare ID string.
+    By default fetches: status, bigquery_type, entity, license, availability, organization.
+    The "area" category is excluded by default because it contains thousands of entries
+    (every municipality). Use lookup_area() to get a specific area ID instead.
 
     Args:
         env: "dev" or "prod"
+        keys: list of categories to fetch, e.g. ["status", "entity"].
+              Valid keys: status, bigquery_type, entity, area, license, availability, organization.
+              Defaults to all except "area".
+
+    Returns a dict mapping category → {slug: id}.
     """
-    cache_key = f"ids_{env}"
+    _DEFAULT_KEYS = ["status", "bigquery_type", "entity", "license", "availability", "organization"]
+    requested = set(keys) if keys else set(_DEFAULT_KEYS)
+
+    cache_key = f"ids_{env}_{'_'.join(sorted(requested))}"
     if cache_key in _cache.get("ids", {}):
         return _cache["ids"][cache_key]
 
     result: dict[str, dict] = {}
 
-    # Status
-    nodes = _fetch_all(env, "allStatus", "id slug")
-    result["status"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+    if "status" in requested:
+        nodes = _fetch_all(env, "allStatus", "id slug")
+        result["status"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
-    # BigQueryType
-    for qname in ["allBigquerytype", "allBigQueryType"]:
-        try:
-            nodes = _fetch_all(env, qname, "id name")
-            result["bigquery_type"] = {n["name"]: _strip_id(n["id"]) for n in nodes}
-            break
-        except Exception:
-            continue
-    if "bigquery_type" not in result:
-        result["bigquery_type"] = {}
+    if "bigquery_type" in requested:
+        for qname in ["allBigquerytype", "allBigQueryType"]:
+            try:
+                nodes = _fetch_all(env, qname, "id name")
+                result["bigquery_type"] = {n["name"]: _strip_id(n["id"]) for n in nodes}
+                break
+            except Exception:
+                continue
+        if "bigquery_type" not in result:
+            result["bigquery_type"] = {}
 
-    # Entity
-    nodes = _fetch_all(env, "allEntity", "id slug namePt")
-    result["entity"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+    if "entity" in requested:
+        nodes = _fetch_all(env, "allEntity", "id slug namePt")
+        result["entity"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
-    # Area (server-side filter to avoid pagination issues)
-    data = _gql(
-        '{ allArea(first: 500) { edges { node { id slug } } } }',
-        env=env,
-    )
-    result["area"] = {
-        e["node"]["slug"]: _strip_id(e["node"]["id"])
-        for e in data["allArea"]["edges"]
-    }
+    if "area" in requested:
+        data = _gql(
+            '{ allArea(first: 500) { edges { node { id slug } } } }',
+            env=env,
+        )
+        result["area"] = {
+            e["node"]["slug"]: _strip_id(e["node"]["id"])
+            for e in data["allArea"]["edges"]
+        }
 
-    # License
-    nodes = _fetch_all(env, "allLicense", "id slug namePt")
-    result["license"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+    if "license" in requested:
+        nodes = _fetch_all(env, "allLicense", "id slug namePt")
+        result["license"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
-    # Availability
-    nodes = _fetch_all(env, "allAvailability", "id slug namePt")
-    result["availability"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+    if "availability" in requested:
+        nodes = _fetch_all(env, "allAvailability", "id slug namePt")
+        result["availability"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
-    # Organization
-    nodes = _fetch_all(env, "allOrganization", "id slug namePt")
-    result["organization"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+    if "organization" in requested:
+        nodes = _fetch_all(env, "allOrganization", "id slug namePt")
+        result["organization"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
-    # Cache result
     if "ids" not in _cache:
         _cache["ids"] = {}
     _cache["ids"][cache_key] = result
     return result
+
+
+@mcp.tool()
+def lookup_area(slug: str, env: str = "dev") -> dict:
+    """
+    Look up a single area by slug and return its ID.
+
+    Use this instead of discover_ids for area lookups — the full area list
+    contains thousands of municipality-level entries and is very large.
+
+    Args:
+        slug: area slug, e.g. "br", "br_sp", "br_sp_3550308"
+        env: "dev" or "prod"
+
+    Returns: {"slug": str, "id": str}
+    """
+    data = _gql(
+        '{ allArea(slug: $slug, first: 1) { edges { node { id slug } } } }',
+        {"slug": slug},
+        env=env,
+    )
+    edges = data["allArea"]["edges"]
+    if not edges:
+        raise RuntimeError(f"Area not found: {slug!r}")
+    node = edges[0]["node"]
+    return {"slug": node["slug"], "id": _strip_id(node["id"])}
 
 
 @mcp.tool()
@@ -470,6 +505,7 @@ def create_update_table(
     """
     fields: dict[str, Any] = {
         "slug": slug,
+        "name": name_pt,  # API requires a single 'name' field
         "namePt": name_pt,
         "nameEn": name_en,
         "nameEs": name_es,
@@ -624,7 +660,7 @@ def delete_column(
     q = """
     mutation($id: UUID!) {
         DeleteColumn(id: $id) {
-            errors { field messages }
+            errors
         }
     }
     """
