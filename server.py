@@ -1142,13 +1142,14 @@ def get_authenticated_account(env: str = "dev") -> dict:
     """
     email, _ = _get_credentials(env)
     data = _gql(
-        '{ allAccount(first: 500) { edges { node { id email } } } }',
+        'query($email: String!) { allAccount(first: 1, email: $email) { edges { node { id email } } } }',
+        {"email": email},
         env=env,
     )
-    for e in data["allAccount"]["edges"]:
-        n = e["node"]
-        if n.get("email", "").lower() == email.lower():
-            return {"id": _strip_id(n["id"]), "email": n["email"]}
+    edges = data["allAccount"]["edges"]
+    if edges:
+        n = edges[0]["node"]
+        return {"id": _strip_id(n["id"]), "email": n["email"]}
     raise RuntimeError(f"Account not found for email: {email}")
 
 
