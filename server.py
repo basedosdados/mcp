@@ -3,7 +3,7 @@ databasis-mcp: MCP server wrapping the Data Basis GraphQL backend.
 
 Credentials (in priority order):
   1. Env vars: EMAIL and PASSWORD
-  2. ~/.basedosdados/backend_credentials.json: {"dev": {"email": ..., "password": ...}, "prod": {...}}
+  2. ~/.basedosdados/backend_credentials.json: {"local": {"email": ..., "password": ...}, "dev": {...}, "prod": {...}}
 
 Environment:
   ENV=dev (default) or ENV=prod
@@ -34,6 +34,7 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 
 URLS = {
+    "local": "http://localhost:8080",
     "dev": "https://development.backend.basedosdados.org",
     "prod": "https://backend.basedosdados.org",
 }
@@ -167,6 +168,66 @@ def _mut(
 def _strip_id(node_id: str) -> str:
     s = str(node_id)
     return s.split(":", 1)[1] if ":" in s else s
+
+
+def _lookup_directory_column(directory_column_str: str, env: str) -> str | None:
+    """
+    Given an architecture-sheet directory_column string like
+    "br_bd_diretorios_data_tempo.ano:ano", look up and return the
+    backend Column node ID for that column, or None if not found.
+
+    Format: "<dataset_slug>.<table_slug>:<column_name>"
+    """
+    if not directory_column_str or "." not in directory_column_str or ":" not in directory_column_str:
+        return None
+    dot_pos = directory_column_str.rfind(".")
+    colon_pos = directory_column_str.find(":", dot_pos)
+    if colon_pos == -1:
+        return None
+    dataset_slug = directory_column_str[:dot_pos]
+    table_slug = directory_column_str[dot_pos + 1:colon_pos]
+    column_name = directory_column_str[colon_pos + 1:]
+
+    gql = """
+    query($slug: String!) {
+        allDataset(slug: $slug) {
+            edges { node {
+                tables(first: 100) { edges { node {
+                    slug
+                    columns(first: 200) { edges { node { id name } } }
+                } } }
+            } }
+        }
+    }
+    """
+
+    def _search(slug: str) -> str | None:
+        data = _gql(gql, {"slug": slug}, env=env)
+        edges = data["allDataset"]["edges"]
+        if not edges:
+            return None
+        for te in edges[0]["node"]["tables"]["edges"]:
+            t = te["node"]
+            if t["slug"] == table_slug:
+                for ce in t["columns"]["edges"]:
+                    col = ce["node"]
+                    if col["name"] == column_name:
+                        return _strip_id(col["id"])
+        return None
+
+    # Try the slug as written in the architecture sheet first
+    result = _search(dataset_slug)
+    if result:
+        return result
+
+    # Retry without common BD prefixes (e.g. "br_bd_" → "") used in dev
+    for prefix in ("br_bd_", "br_"):
+        if dataset_slug.startswith(prefix):
+            result = _search(dataset_slug[len(prefix):])
+            if result:
+                return result
+
+    return None
 
 
 def _fetch_all(token_env: str, query_name: str, fields: str) -> list[dict]:
@@ -521,7 +582,7 @@ def create_update_table(
     if description_es:
         fields["descriptionEs"] = description_es
     if raw_data_source_ids:
-        fields["rawDataSources"] = raw_data_source_ids
+        fields["rawDataSource"] = raw_data_source_ids
     if id:
         fields["id"] = id
 
@@ -541,6 +602,8 @@ def upload_columns(
     Upload columns from an architecture Google Sheets URL to a table.
 
     Uses the /upload_columns/ REST endpoint. Requires a valid CSRF token.
+
+    NOTE: This REST endpoint currently returns 500. Use upload_columns_from_sheet instead.
 
     Args:
         table_id: bare table ID
@@ -572,6 +635,148 @@ def upload_columns(
         timeout=120,
     )
     return {"success": resp.ok, "status_code": resp.status_code, "text": resp.text[:500]}
+
+
+@mcp.tool()
+def upload_columns_from_sheet(
+    table_id: str,
+    architecture_url: str,
+    env: str = "dev",
+    observation_levels: str = "",
+) -> dict:
+    """
+    Read columns from a public Google Sheet and create them on a table via GraphQL.
+
+    Bypasses the broken /upload_columns/ REST endpoint (500 error) by downloading
+    the sheet as CSV, parsing column definitions, and calling CreateUpdateColumn
+    mutations directly.
+
+    The sheet must be shared as "Anyone with link can view". Expected columns:
+      name, bigquery_type, description, temporal_coverage, covered_by_dictionary,
+      directory_column, measurement_unit, has_sensitive_data
+
+    Args:
+        table_id: bare table ID
+        architecture_url: Google Sheets URL
+        env: "dev" or "prod"
+        observation_levels: JSON dict mapping column name → bare OL ID,
+            e.g. '{"ano": "ol-id-1", "sigla_uf": "ol-id-2"}'.
+            Columns present in the dict get their observationLevel linked on creation.
+
+    Returns: {"created": int, "columns": [{"name": str, "id": str}], "errors": [...]}
+    """
+    import csv
+    import io
+    import re
+
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", architecture_url)
+    if not match:
+        raise ValueError(f"Cannot extract sheet ID from URL: {architecture_url}")
+    sheet_id = match.group(1)
+
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    resp = requests.get(csv_url, timeout=30, allow_redirects=True)
+    if not resp.ok:
+        raise RuntimeError(f"Failed to download sheet CSV: HTTP {resp.status_code}")
+
+    rows = list(csv.DictReader(io.StringIO(resp.content.decode('utf-8'))))
+
+    ol_map: dict[str, str] = json.loads(observation_levels) if observation_levels.strip() else {}
+
+    ids = discover_ids(env=env, keys=["bigquery_type", "status"])
+    bq_type_ids: dict[str, str] = ids.get("bigquery_type", {})
+    published_status_id: str = ids.get("status", {}).get("published", "")
+
+    # Build one input dict per row
+    column_inputs = []
+    for row in rows:
+        name = row.get("name", "").strip()
+        if not name:
+            continue
+
+        bq_type_name = row.get("bigquery_type", "STRING").strip()
+        bq_type_id = bq_type_ids.get(bq_type_name)
+
+        fields: dict[str, Any] = {
+            "name": name,
+            "table": table_id,
+        }
+        if published_status_id:
+            fields["status"] = published_status_id
+        if bq_type_id:
+            fields["bigqueryType"] = bq_type_id
+
+        desc = row.get("description", "").strip()
+        if desc:
+            fields["descriptionPt"] = desc
+
+        tc = row.get("temporal_coverage", "").strip()
+        if tc:
+            fields["temporalCoverage"] = tc
+
+        cbd = row.get("covered_by_dictionary", "no").strip().lower()
+        fields["coveredByDictionary"] = cbd in ("yes", "true", "1")
+
+        mu = row.get("measurement_unit", "").strip()
+        if mu:
+            fields["measurementUnit"] = mu
+
+        hsd = row.get("has_sensitive_data", "no").strip().lower()
+        fields["containsSensitiveData"] = hsd in ("yes", "true", "1")
+
+        if name in ol_map:
+            fields["observationLevel"] = ol_map[name]
+
+        dir_col = row.get("directory_column", "").strip()
+        if dir_col:
+            col_node_id = _lookup_directory_column(dir_col, env)
+            if col_node_id:
+                fields["directoryPrimaryKey"] = col_node_id
+
+        column_inputs.append(fields)
+
+    if not column_inputs:
+        return {"created": 0, "columns": [], "errors": []}
+
+    # Batch all columns into a single GraphQL mutation request using aliases
+    token, base_url = _get_token(env)
+    variables = {f"input{i}": inp for i, inp in enumerate(column_inputs)}
+    aliases = "\n".join(
+        f'  col{i}: CreateUpdateColumn(input: $input{i}) {{ errors {{ field messages }} column {{ id name }} }}'
+        for i in range(len(column_inputs))
+    )
+    var_defs = ", ".join(
+        f"$input{i}: CreateUpdateColumnInput!" for i in range(len(column_inputs))
+    )
+    query = f"mutation({var_defs}) {{\n{aliases}\n}}"
+
+    r = requests.post(
+        f"{base_url}/graphql",
+        json={"query": query, "variables": variables},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=120,
+    )
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code}:\n{r.text}")
+    data = r.json()
+
+    created = []
+    errors = []
+    gql_errors = data.get("errors")
+    if gql_errors:
+        raise RuntimeError(json.dumps(gql_errors, indent=2))
+
+    for i, inp in enumerate(column_inputs):
+        name = inp["name"]
+        payload = data.get("data", {}).get(f"col{i}", {})
+        if payload.get("errors"):
+            errors.append({"name": name, "error": payload["errors"]})
+        elif payload.get("column"):
+            created.append({"name": name, "id": _strip_id(payload["column"]["id"])})
+        else:
+            errors.append({"name": name, "error": "no column returned"})
+
+    return {"created": len(created), "columns": created, "errors": errors}
 
 
 @mcp.tool()
@@ -630,11 +835,10 @@ def update_column(
     if measurement_unit:
         fields["measurementUnit"] = measurement_unit
     if has_sensitive_data:
-        fields["hasSensitiveData"] = has_sensitive_data
+        fields["containsSensitiveData"] = has_sensitive_data
     if covered_by_dictionary:
         fields["coveredByDictionary"] = covered_by_dictionary
-    if directory_column_name:
-        fields["directoryColumn"] = directory_column_name
+    # directoryColumn is not supported by CreateUpdateColumnInput — omitted
     if temporal_coverage:
         fields["temporalCoverage"] = temporal_coverage
 
@@ -669,6 +873,34 @@ def delete_column(
     if payload and payload.get("errors"):
         raise RuntimeError(f"DeleteColumn errors: {payload['errors']}")
     return {"deleted": True, "id": column_id}
+
+
+@mcp.tool()
+def delete_table(
+    table_id: str,
+    env: str = "dev",
+) -> dict:
+    """
+    Delete a table record from the backend.
+
+    Args:
+        table_id: bare table ID (UUID)
+        env: "dev" or "prod"
+
+    Returns: {"deleted": True, "id": str}
+    """
+    q = """
+    mutation($id: UUID!) {
+        DeleteTable(id: $id) {
+            errors
+        }
+    }
+    """
+    result = _gql(q, {"id": table_id}, env=env)
+    payload = result["DeleteTable"]
+    if payload and payload.get("errors"):
+        raise RuntimeError(f"DeleteTable errors: {payload['errors']}")
+    return {"deleted": True, "id": table_id}
 
 
 @mcp.tool()
@@ -864,6 +1096,8 @@ def get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
     """
     Return raw data sources associated with a dataset.
 
+    Queries via dataset.rawDataSources (not allRawdatasource, which has auth/visibility issues).
+
     Args:
         dataset_slug: e.g. "siconfi"
         env: "dev" or "prod"
@@ -872,22 +1106,30 @@ def get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
     """
     data = _gql(
         """
-        { allRawdatasource(first: 200) {
-            edges { node { id name url dataset { slug } } }
-        } }
+        query($slug: String!) {
+            allDataset(slug: $slug) {
+                edges { node {
+                    rawDataSources(first: 50) {
+                        edges { node { id name url } }
+                    }
+                } }
+            }
+        }
         """,
+        {"slug": dataset_slug},
         env=env,
     )
+    edges = data["allDataset"]["edges"]
+    if not edges:
+        return []
     results = []
-    for e in data["allRawdatasource"]["edges"]:
+    for e in edges[0]["node"]["rawDataSources"]["edges"]:
         n = e["node"]
-        ds_slug = (n.get("dataset") or {}).get("slug", "")
-        if ds_slug.lower() == dataset_slug.lower() or dataset_slug.lower() in (n.get("name") or "").lower():
-            results.append({
-                "id": _strip_id(n["id"]),
-                "name": n.get("name", ""),
-                "url": n.get("url", ""),
-            })
+        results.append({
+            "id": _strip_id(n["id"]),
+            "name": n.get("name", ""),
+            "url": n.get("url", ""),
+        })
     return results
 
 
