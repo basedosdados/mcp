@@ -273,19 +273,20 @@ def discover_ids(
     """
     Fetch and return reference IDs needed for metadata creation.
 
-    By default fetches: status, bigquery_type, entity, license, availability, organization.
+    By default fetches: status, bigquery_type, entity, license, availability, organization, theme.
     The "area" category is excluded by default because it contains thousands of entries
     (every municipality). Use lookup_area() to get a specific area ID instead.
 
     Args:
         env: "dev" or "prod"
         keys: list of categories to fetch, e.g. ["status", "entity"].
-              Valid keys: status, bigquery_type, entity, area, license, availability, organization.
+              Valid keys: status, bigquery_type, entity, area, license, availability,
+                          organization, theme.
               Defaults to all except "area".
 
     Returns a dict mapping category → {slug: id}.
     """
-    _DEFAULT_KEYS = ["status", "bigquery_type", "entity", "license", "availability", "organization"]
+    _DEFAULT_KEYS = ["status", "bigquery_type", "entity", "license", "availability", "organization", "theme"]
     requested = set(keys) if keys else set(_DEFAULT_KEYS)
 
     cache_key = f"ids_{env}_{'_'.join(sorted(requested))}"
@@ -335,6 +336,10 @@ def discover_ids(
         nodes = _fetch_all(env, "allOrganization", "id slug namePt")
         result["organization"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
+    if "theme" in requested:
+        nodes = _fetch_all(env, "allTheme", "id slug namePt")
+        result["theme"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+
     if "ids" not in _cache:
         _cache["ids"] = {}
     _cache["ids"][cache_key] = result
@@ -356,7 +361,7 @@ def lookup_area(slug: str, env: str = "dev") -> dict:
     Returns: {"slug": str, "id": str}
     """
     data = _gql(
-        '{ allArea(slug: $slug, first: 1) { edges { node { id slug } } } }',
+        'query($slug: String!) { allArea(slug: $slug, first: 1) { edges { node { id slug } } } }',
         {"slug": slug},
         env=env,
     )
@@ -655,10 +660,7 @@ def create_update_dataset(
     description_es: str,
     organization_id: str,
     theme_ids: list[str],
-    license_id: str,
-    availability_id: str,
     status_id: str,
-    is_closed: bool = False,
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
@@ -671,18 +673,16 @@ def create_update_dataset(
     """
     fields: dict[str, Any] = {
         "slug": slug,
+        "name": name_pt,  # API requires a single 'name' field
         "namePt": name_pt,
         "nameEn": name_en,
         "nameEs": name_es,
         "descriptionPt": description_pt,
         "descriptionEn": description_en,
         "descriptionEs": description_es,
-        "organization": organization_id,
+        "organizations": [organization_id],
         "themes": theme_ids,
-        "license": license_id,
-        "availability": availability_id,
         "status": status_id,
-        "isClosed": is_closed,
     }
     if id:
         fields["id"] = id
@@ -860,10 +860,6 @@ def upload_columns_from_sheet(
         if desc:
             fields["descriptionPt"] = desc
 
-        tc = row.get("temporal_coverage", "").strip()
-        if tc:
-            fields["temporalCoverage"] = tc
-
         cbd = row.get("covered_by_dictionary", "no").strip().lower()
         fields["coveredByDictionary"] = cbd in ("yes", "true", "1")
 
@@ -945,7 +941,6 @@ def update_column(
     has_sensitive_data: bool = False,
     covered_by_dictionary: bool = False,
     directory_column_name: str = "",
-    temporal_coverage: str = "",
     env: str = "dev",
 ) -> dict:
     """
@@ -964,7 +959,6 @@ def update_column(
         has_sensitive_data: sensitive data flag
         covered_by_dictionary: whether covered by the dataset dictionary
         directory_column_name: BD directories FK (e.g. "br_bd_diretorios_brasil.municipio:id_municipio")
-        temporal_coverage: per-column temporal coverage if different from table
         env: "dev" or "prod"
 
     Returns: {"id": str, "name": str}
@@ -992,9 +986,7 @@ def update_column(
         fields["containsSensitiveData"] = has_sensitive_data
     if covered_by_dictionary:
         fields["coveredByDictionary"] = covered_by_dictionary
-    # directoryColumn is not supported by CreateUpdateColumnInput — omitted
-    if temporal_coverage:
-        fields["temporalCoverage"] = temporal_coverage
+    # directoryColumn / temporalCoverage are not valid on CreateUpdateColumnInput — omitted
 
     payload = _mut("CreateUpdateColumn", fields, "column { id name }", env=env)
     col = payload["column"]
@@ -1285,6 +1277,54 @@ def get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
             "url": n.get("url", ""),
         })
     return results
+
+
+@mcp.tool()
+def create_update_raw_data_source(
+    dataset_id: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    url: str,
+    license_id: str,
+    availability_id: str,
+    description_pt: str = "",
+    description_en: str = "",
+    description_es: str = "",
+    has_structured_data: bool = True,
+    has_sensitive_data: bool = False,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a raw data source record on a dataset.
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str}
+    """
+    fields: dict[str, Any] = {
+        "dataset": dataset_id,
+        "name": name_pt,
+        "namePt": name_pt,
+        "nameEn": name_en,
+        "nameEs": name_es,
+        "url": url,
+        "license": license_id,
+        "availability": availability_id,
+        "containsStructuredData": has_structured_data,
+    }
+    if description_pt:
+        fields["descriptionPt"] = description_pt
+    if description_en:
+        fields["descriptionEn"] = description_en
+    if description_es:
+        fields["descriptionEs"] = description_es
+    if id:
+        fields["id"] = id
+
+    payload = _mut("CreateUpdateRawDataSource", fields, "rawdatasource { id }", env=env)
+    return {"id": _strip_id(payload["rawdatasource"]["id"])}
 
 
 @mcp.tool()
