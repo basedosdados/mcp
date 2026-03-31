@@ -572,6 +572,63 @@ def reorder_observation_levels(
 
 
 @mcp.tool()
+def reorder_columns(
+    table_id: str,
+    column_names: list[str],
+    env: str = "dev",
+) -> dict:
+    """
+    Set the display order of columns within a table.
+
+    Args:
+        table_id: bare table ID
+        column_names: ordered list of column names — first name gets order 0
+        env: "dev" or "prod"
+
+    Returns: {"reordered": int, "order": [{"name": str, "id": str}]}
+    """
+    ds_data = _gql(
+        """
+        query($id: UUID!) {
+            allColumn(table_Id: $id) {
+                edges { node { _id name } }
+            }
+        }
+        """,
+        {"id": table_id},
+        env=env,
+    )
+    name_to_id = {
+        edge["node"]["name"]: edge["node"]["_id"]
+        for edge in ds_data["allColumn"]["edges"]
+    }
+
+    missing = [n for n in column_names if n not in name_to_id]
+    if missing:
+        raise RuntimeError(f"Column names not found in table: {missing}")
+
+    ordered_ids = [name_to_id[n] for n in column_names]
+
+    result = _gql(
+        """
+        mutation($ids: [UUID]!) {
+            reorderColumns(ids: $ids) { ok errors }
+        }
+        """,
+        {"ids": ordered_ids},
+        env=env,
+    )
+    payload = result["reorderColumns"]
+    if not payload["ok"]:
+        raise RuntimeError(f"reorderColumns failed: {payload['errors']}")
+
+    return {
+        "reordered": len(ordered_ids),
+        "order": [{"name": n, "id": name_to_id[n]} for n in column_names],
+    }
+
+
+@mcp.tool()
 def create_update_dataset(
     slug: str,
     name_pt: str,

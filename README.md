@@ -26,6 +26,9 @@ Permite que LLMs (Claude, GPT, etc.) interajam diretamente com o backend da Base
 | `create_update_coverage` | Cria ou atualiza cobertura |
 | `create_update_datetime_range` | Cria ou atualiza intervalo temporal |
 | `create_update_update` | Cria ou atualiza metadados de atualização |
+| `reorder_tables` | Define a ordem de exibição das tabelas em um dataset |
+| `reorder_observation_levels` | Define a ordem de exibição dos níveis de observação em uma tabela |
+| `reorder_columns` | Define a ordem de exibição das colunas em uma tabela |
 | `get_raw_data_sources` | Lista fontes brutas de um dataset |
 | `get_authenticated_account` | Retorna conta autenticada no momento |
 
