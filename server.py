@@ -495,6 +495,83 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
 
 
 @mcp.tool()
+def reorder_tables(
+    dataset_slug: str,
+    table_slugs: list[str],
+    env: str = "dev",
+) -> dict:
+    """
+    Set the display order of tables within a dataset.
+
+    Args:
+        dataset_slug: dataset slug (e.g. "siconfi")
+        table_slugs: ordered list of table slugs — first slug gets order 0
+        env: "dev" or "prod"
+
+    Returns: {"reordered": int, "order": [{"slug": str, "id": str}]}
+    """
+    ds = get_dataset(slug=dataset_slug, env=env)
+    if not ds["found"]:
+        raise RuntimeError(f"Dataset not found: {dataset_slug}")
+    slug_to_id = {slug: meta["id"] for slug, meta in ds["tables"].items()}
+
+    missing = [s for s in table_slugs if s not in slug_to_id]
+    if missing:
+        raise RuntimeError(f"Table slugs not found in dataset: {missing}")
+
+    ordered_ids = [slug_to_id[s] for s in table_slugs]
+
+    result = _gql(
+        """
+        mutation($ids: [UUID]!) {
+            reorderTables(ids: $ids) { ok errors }
+        }
+        """,
+        {"ids": ordered_ids},
+        env=env,
+    )
+    payload = result["reorderTables"]
+    if not payload["ok"]:
+        raise RuntimeError(f"reorderTables failed: {payload['errors']}")
+
+    return {
+        "reordered": len(ordered_ids),
+        "order": [{"slug": s, "id": slug_to_id[s]} for s in table_slugs],
+    }
+
+
+@mcp.tool()
+def reorder_observation_levels(
+    table_id: str,
+    ol_ids: list[str],
+    env: str = "dev",
+) -> dict:
+    """
+    Set the display order of observation levels on a table.
+
+    Args:
+        table_id: bare table ID
+        ol_ids: ordered list of bare OL IDs — first ID gets order 0
+        env: "dev" or "prod"
+
+    Returns: {"reordered": int}
+    """
+    result = _gql(
+        """
+        mutation($ids: [UUID]!) {
+            reorderObservationLevels(ids: $ids) { ok errors }
+        }
+        """,
+        {"ids": ol_ids},
+        env=env,
+    )
+    payload = result["reorderObservationLevels"]
+    if not payload["ok"]:
+        raise RuntimeError(f"reorderObservationLevels failed: {payload['errors']}")
+    return {"reordered": len(ol_ids)}
+
+
+@mcp.tool()
 def create_update_dataset(
     slug: str,
     name_pt: str,
