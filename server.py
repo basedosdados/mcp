@@ -510,10 +510,26 @@ def reorder_tables(
 
     Returns: {"reordered": int, "order": [{"slug": str, "id": str}]}
     """
-    ds = get_dataset(slug=dataset_slug, env=env)
-    if not ds["found"]:
+    data = _gql(
+        """
+        query($slug: String!) {
+            allDataset(slug: $slug) {
+                edges { node {
+                    tables { edges { node { _id slug } } }
+                } }
+            }
+        }
+        """,
+        {"slug": dataset_slug},
+        env=env,
+    )
+    edges = data["allDataset"]["edges"]
+    if not edges:
         raise RuntimeError(f"Dataset not found: {dataset_slug}")
-    slug_to_id = {slug: meta["id"] for slug, meta in ds["tables"].items()}
+    slug_to_id = {
+        t["node"]["slug"]: _strip_id(t["node"]["_id"])
+        for t in edges[0]["node"]["tables"]["edges"]
+    }
 
     missing = [s for s in table_slugs if s not in slug_to_id]
     if missing:
