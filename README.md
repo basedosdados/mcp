@@ -94,16 +94,16 @@ Adicione ao arquivo `~/.claude/settings.json` (ou `settings.local.json`):
 {
   "mcpServers": {
     "databasis": {
-      "command": "python",
+      "type": "stdio",
+      "command": "/caminho/para/python3.11",
       "args": ["/caminho/para/mcp/server.py"],
-      "env": {
-        "EMAIL": "seu@email.com",
-        "PASSWORD": "suasenha"
-      }
+      "env": {}
     }
   }
 }
 ```
+
+As credenciais são lidas automaticamente de `~/.basedosdados/backend_credentials.json` — não é necessário passá-las como variáveis de ambiente.
 
 Após salvar, reconecte com `/mcp` no Claude Code.
 
