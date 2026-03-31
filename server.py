@@ -785,6 +785,7 @@ def update_column(
     column_name: str,
     table_id: str,
     observation_level_id: str | None = None,
+    clear_observation_level: bool = False,
     is_partition: bool = False,
     is_primary_key: bool = False,
     description_pt: str = "",
@@ -805,6 +806,7 @@ def update_column(
         column_name: column name (required by CreateUpdateColumn)
         table_id: bare table ID
         observation_level_id: bare OL ID to link (optional)
+        clear_observation_level: when True, explicitly sets observationLevel to None (clears the FK)
         is_partition: whether this column is a BQ partition key
         is_primary_key: whether this is a primary key column
         description_pt/en/es: descriptions in each language
@@ -824,7 +826,9 @@ def update_column(
         "isPartition": is_partition,
         "isPrimaryKey": is_primary_key,
     }
-    if observation_level_id:
+    if clear_observation_level:
+        fields["observationLevel"] = None
+    elif observation_level_id:
         fields["observationLevel"] = observation_level_id
     if description_pt:
         fields["descriptionPt"] = description_pt
