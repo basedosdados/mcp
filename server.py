@@ -273,10 +273,13 @@ def discover_ids(
     """
     Fetch and return reference IDs needed for metadata creation.
 
+    Fetches entire reference lists. Use lookup_id() instead when you only need
+    one or a few slugs — discover_ids is expensive for large categories like
+    organization and tag.
+
     By default fetches: status, bigquery_type, entity, license, availability,
     organization, theme, tag, entity_category, language, measurement_unit_category.
-    The "area" category is excluded by default because it contains thousands of entries
-    (every municipality). Use lookup_area() to get a specific area ID instead.
+    The "area" category is excluded — use lookup_area() for area ID lookups.
 
     Args:
         env: "dev" or "prod"
@@ -358,6 +361,49 @@ def discover_ids(
     return result
 
 
+_CATEGORY_QUERY_MAP = {
+    "organization": ("allOrganization", "id slug namePt"),
+    "theme": ("allTheme", "id slug namePt"),
+    "tag": ("allTag", "id slug name"),
+    "entity": ("allEntity", "id slug namePt"),
+    "entity_category": ("allEntityCategory", "id slug name"),
+    "language": ("allLanguage", "id slug name"),
+    "measurement_unit_category": ("allMeasurementUnitCategory", "id slug name"),
+    "license": ("allLicense", "id slug namePt"),
+    "availability": ("allAvailability", "id slug namePt"),
+    "status": ("allStatus", "id slug"),
+}
+
+
+@mcp.tool()
+def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
+    """
+    Look up a single reference object by category and slug.
+
+    Use this instead of discover_ids when you only need one or a few IDs —
+    discover_ids fetches entire lists which can be very large for orgs/tags.
+
+    Args:
+        category: one of organization, theme, tag, entity, entity_category,
+                  language, measurement_unit_category, license, availability, status
+        slug: the slug to look up, e.g. "mma", "environment", "conservacao"
+        env: "dev" or "prod"
+
+    Returns: {"slug": str, "id": str, "name": str}
+    """
+    if category not in _CATEGORY_QUERY_MAP:
+        raise ValueError(f"Unknown category {category!r}. Valid: {list(_CATEGORY_QUERY_MAP)}")
+    query_name, fields = _CATEGORY_QUERY_MAP[category]
+    q = f'query($slug: String!) {{ {query_name}(slug: $slug, first: 1) {{ edges {{ node {{ {fields} }} }} }} }}'
+    data = _gql(q, {"slug": slug}, env=env)
+    edges = data[query_name]["edges"]
+    if not edges:
+        raise RuntimeError(f"{category} not found: {slug!r}")
+    node = edges[0]["node"]
+    name = node.get("namePt") or node.get("name") or node.get("slug")
+    return {"slug": node["slug"], "id": _strip_id(node["id"]), "name": name}
+
+
 @mcp.tool()
 def lookup_area(slug: str, env: str = "dev") -> dict:
     """
@@ -394,6 +440,8 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         "found": bool,
         "id": str | None,
         "slug": str,
+        "name_pt/en/es": str,
+        "description_pt/en/es": str,
         "organizations": [{"id", "slug"}],
         "themes": [{"id", "slug"}],
         "tags": [{"id", "slug"}],
@@ -419,6 +467,8 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             edges {
                 node {
                     id slug
+                    namePt nameEn nameEs
+                    descriptionPt descriptionEn descriptionEs
                     organizations(first: 10) { edges { node { id slug } } }
                     themes(first: 10) { edges { node { id slug } } }
                     tags(first: 20) { edges { node { id slug } } }
@@ -513,6 +563,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         "found": True,
         "id": _strip_id(ds["id"]),
         "slug": ds["slug"],
+        "name_pt": ds.get("namePt"),
+        "name_en": ds.get("nameEn"),
+        "name_es": ds.get("nameEs"),
+        "description_pt": ds.get("descriptionPt"),
+        "description_en": ds.get("descriptionEn"),
+        "description_es": ds.get("descriptionEs"),
         "organizations": [{"id": _strip_id(o["node"]["id"]), "slug": o["node"]["slug"]} for o in ds["organizations"]["edges"]],
         "themes": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["themes"]["edges"]],
         "tags": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["tags"]["edges"]],
