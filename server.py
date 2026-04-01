@@ -47,8 +47,9 @@ _cache: dict[str, Any] = {
     "token": None,
     "expires_at": 0.0,
     "env": None,
-    "ids": {},   # {env: {category: {slug: id}}}
+    "ids": {},   # {cache_key: (result, fetched_at)}
 }
+_IDS_TTL = 30  # seconds
 
 
 # ---------------------------------------------------------------------------
@@ -231,15 +232,25 @@ def _lookup_directory_column(directory_column_str: str, env: str) -> str | None:
 
 
 def _fetch_all(token_env: str, query_name: str, fields: str) -> list[dict]:
-    q = f"""
-    query {{
-        {query_name}(first: 500) {{
-            edges {{ node {{ {fields} }} }}
+    nodes: list[dict] = []
+    cursor: str | None = None
+    while True:
+        after = f', after: "{cursor}"' if cursor else ""
+        q = f"""
+        query {{
+            {query_name}(first: 500{after}) {{
+                pageInfo {{ hasNextPage endCursor }}
+                edges {{ node {{ {fields} }} }}
+            }}
         }}
-    }}
-    """
-    data = _gql(q, env=token_env)
-    return [e["node"] for e in data[query_name]["edges"]]
+        """
+        data = _gql(q, env=token_env)
+        page = data[query_name]
+        nodes.extend(e["node"] for e in page["edges"])
+        if not page["pageInfo"]["hasNextPage"]:
+            break
+        cursor = page["pageInfo"]["endCursor"]
+    return nodes
 
 
 # ---------------------------------------------------------------------------
@@ -299,8 +310,11 @@ def discover_ids(
     requested = set(keys) if keys else set(_DEFAULT_KEYS)
 
     cache_key = f"ids_{env}_{'_'.join(sorted(requested))}"
-    if cache_key in _cache.get("ids", {}):
-        return _cache["ids"][cache_key]
+    cached = _cache.get("ids", {}).get(cache_key)
+    if cached is not None:
+        result_cached, fetched_at = cached
+        if time.time() - fetched_at < _IDS_TTL:
+            return result_cached
 
     result: dict[str, dict] = {}
 
@@ -357,7 +371,7 @@ def discover_ids(
 
     if "ids" not in _cache:
         _cache["ids"] = {}
-    _cache["ids"][cache_key] = result
+    _cache["ids"][cache_key] = (result, time.time())
     return result
 
 
@@ -1394,6 +1408,126 @@ def create_update_raw_data_source(
 
     payload = _mut("CreateUpdateRawDataSource", fields, "rawdatasource { id }", env=env)
     return {"id": _strip_id(payload["rawdatasource"]["id"])}
+
+
+@mcp.tool()
+def create_update_tag(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a tag record.
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    fields: dict[str, Any] = {
+        "slug": slug,
+        "name": name_pt,
+        "namePt": name_pt,
+        "nameEn": name_en,
+        "nameEs": name_es,
+    }
+    if id:
+        fields["id"] = id
+
+    payload = _mut("CreateUpdateTag", fields, "tag { id slug }", env=env)
+    t = payload["tag"]
+    return {"id": _strip_id(t["id"]), "slug": t["slug"]}
+
+
+@mcp.tool()
+def create_update_theme(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a theme record.
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    fields: dict[str, Any] = {
+        "slug": slug,
+        "name": name_pt,
+        "namePt": name_pt,
+        "nameEn": name_en,
+        "nameEs": name_es,
+    }
+    if id:
+        fields["id"] = id
+
+    payload = _mut("CreateUpdateTheme", fields, "theme { id slug }", env=env)
+    t = payload["theme"]
+    return {"id": _strip_id(t["id"]), "slug": t["slug"]}
+
+
+@mcp.tool()
+def create_update_organization(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    description_pt: str = "",
+    description_en: str = "",
+    description_es: str = "",
+    area_id: str | None = None,
+    website: str = "",
+    twitter: str = "",
+    facebook: str = "",
+    linkedin: str = "",
+    instagram: str = "",
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update an organization record.
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    fields: dict[str, Any] = {
+        "slug": slug,
+        "name": name_pt,
+        "namePt": name_pt,
+        "nameEn": name_en,
+        "nameEs": name_es,
+    }
+    if description_pt:
+        fields["descriptionPt"] = description_pt
+    if description_en:
+        fields["descriptionEn"] = description_en
+    if description_es:
+        fields["descriptionEs"] = description_es
+    if area_id:
+        fields["area"] = area_id
+    if website:
+        fields["website"] = website
+    if twitter:
+        fields["twitter"] = twitter
+    if facebook:
+        fields["facebook"] = facebook
+    if linkedin:
+        fields["linkedin"] = linkedin
+    if instagram:
+        fields["instagram"] = instagram
+    if id:
+        fields["id"] = id
+
+    payload = _mut("CreateUpdateOrganization", fields, "organization { id slug }", env=env)
+    o = payload["organization"]
+    return {"id": _strip_id(o["id"]), "slug": o["slug"]}
 
 
 @mcp.tool()
