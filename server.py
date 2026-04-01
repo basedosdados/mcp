@@ -279,7 +279,7 @@ def discover_ids(
 
     By default fetches: status, bigquery_type, entity, license, availability,
     organization, theme, tag, entity_category, language, measurement_unit_category.
-    The "area" category is excluded — use lookup_area() for area ID lookups.
+    The "area" category is excluded — use lookup_id(category="area", slug=...) instead.
 
     Args:
         env: "dev" or "prod"
@@ -372,6 +372,7 @@ _CATEGORY_QUERY_MAP = {
     "license": ("allLicense", "id slug namePt"),
     "availability": ("allAvailability", "id slug namePt"),
     "status": ("allStatus", "id slug"),
+    "area": ("allArea", "id slug"),
 }
 
 
@@ -385,8 +386,8 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
 
     Args:
         category: one of organization, theme, tag, entity, entity_category,
-                  language, measurement_unit_category, license, availability, status
-        slug: the slug to look up, e.g. "mma", "environment", "conservacao"
+                  language, measurement_unit_category, license, availability, status, area
+        slug: the slug to look up, e.g. "mma", "environment", "conservacao", "br"
         env: "dev" or "prod"
 
     Returns: {"slug": str, "id": str, "name": str}
@@ -403,31 +404,6 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
     name = node.get("namePt") or node.get("name") or node.get("slug")
     return {"slug": node["slug"], "id": _strip_id(node["id"]), "name": name}
 
-
-@mcp.tool()
-def lookup_area(slug: str, env: str = "dev") -> dict:
-    """
-    Look up a single area by slug and return its ID.
-
-    Use this instead of discover_ids for area lookups — the full area list
-    contains thousands of municipality-level entries and is very large.
-
-    Args:
-        slug: area slug, e.g. "br", "br_sp", "br_sp_3550308"
-        env: "dev" or "prod"
-
-    Returns: {"slug": str, "id": str}
-    """
-    data = _gql(
-        'query($slug: String!) { allArea(slug: $slug, first: 1) { edges { node { id slug } } } }',
-        {"slug": slug},
-        env=env,
-    )
-    edges = data["allArea"]["edges"]
-    if not edges:
-        raise RuntimeError(f"Area not found: {slug!r}")
-    node = edges[0]["node"]
-    return {"slug": node["slug"], "id": _strip_id(node["id"])}
 
 
 @mcp.tool()
