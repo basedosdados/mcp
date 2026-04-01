@@ -273,20 +273,26 @@ def discover_ids(
     """
     Fetch and return reference IDs needed for metadata creation.
 
-    By default fetches: status, bigquery_type, entity, license, availability, organization, theme.
+    By default fetches: status, bigquery_type, entity, license, availability,
+    organization, theme, tag, entity_category, language, measurement_unit_category.
     The "area" category is excluded by default because it contains thousands of entries
     (every municipality). Use lookup_area() to get a specific area ID instead.
 
     Args:
         env: "dev" or "prod"
         keys: list of categories to fetch, e.g. ["status", "entity"].
-              Valid keys: status, bigquery_type, entity, area, license, availability,
-                          organization, theme.
+              Valid keys: status, bigquery_type, entity, license, availability,
+                          organization, theme, tag, entity_category, language,
+                          measurement_unit_category.
               Defaults to all except "area".
 
     Returns a dict mapping category → {slug: id}.
     """
-    _DEFAULT_KEYS = ["status", "bigquery_type", "entity", "license", "availability", "organization", "theme"]
+    _DEFAULT_KEYS = [
+        "status", "bigquery_type", "entity", "license", "availability",
+        "organization", "theme", "tag", "entity_category", "language",
+        "measurement_unit_category",
+    ]
     requested = set(keys) if keys else set(_DEFAULT_KEYS)
 
     cache_key = f"ids_{env}_{'_'.join(sorted(requested))}"
@@ -314,16 +320,6 @@ def discover_ids(
         nodes = _fetch_all(env, "allEntity", "id slug namePt")
         result["entity"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
-    if "area" in requested:
-        data = _gql(
-            '{ allArea(first: 500) { edges { node { id slug } } } }',
-            env=env,
-        )
-        result["area"] = {
-            e["node"]["slug"]: _strip_id(e["node"]["id"])
-            for e in data["allArea"]["edges"]
-        }
-
     if "license" in requested:
         nodes = _fetch_all(env, "allLicense", "id slug namePt")
         result["license"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
@@ -339,6 +335,22 @@ def discover_ids(
     if "theme" in requested:
         nodes = _fetch_all(env, "allTheme", "id slug namePt")
         result["theme"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+
+    if "tag" in requested:
+        nodes = _fetch_all(env, "allTag", "id slug name")
+        result["tag"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+
+    if "entity_category" in requested:
+        nodes = _fetch_all(env, "allEntityCategory", "id slug name")
+        result["entity_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+
+    if "language" in requested:
+        nodes = _fetch_all(env, "allLanguage", "id slug name")
+        result["language"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+
+    if "measurement_unit_category" in requested:
+        nodes = _fetch_all(env, "allMeasurementUnitCategory", "id slug name")
+        result["measurement_unit_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "ids" not in _cache:
         _cache["ids"] = {}
@@ -382,6 +394,9 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         "found": bool,
         "id": str | None,
         "slug": str,
+        "organizations": [{"id", "slug"}],
+        "themes": [{"id", "slug"}],
+        "tags": [{"id", "slug"}],
         "tables": {
           "<table_slug>": {
             "id": str,
@@ -404,6 +419,9 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             edges {
                 node {
                     id slug
+                    organizations(first: 10) { edges { node { id slug } } }
+                    themes(first: 10) { edges { node { id slug } } }
+                    tags(first: 20) { edges { node { id slug } } }
                     tables(first: 200) {
                         edges {
                             node {
@@ -495,6 +513,9 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         "found": True,
         "id": _strip_id(ds["id"]),
         "slug": ds["slug"],
+        "organizations": [{"id": _strip_id(o["node"]["id"]), "slug": o["node"]["slug"]} for o in ds["organizations"]["edges"]],
+        "themes": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["themes"]["edges"]],
+        "tags": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["tags"]["edges"]],
         "tables": tables,
     }
 
@@ -661,6 +682,7 @@ def create_update_dataset(
     organization_id: str,
     theme_ids: list[str],
     status_id: str,
+    tag_ids: list[str] | None = None,
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
@@ -668,6 +690,8 @@ def create_update_dataset(
     Create or update a dataset record.
 
     Pass id to update an existing record; omit to create new.
+
+    organizations, themes, and tags are ManyToMany fields — pass IDs from discover_ids.
 
     Returns: {"id": str, "slug": str}
     """
@@ -682,6 +706,7 @@ def create_update_dataset(
         "descriptionEs": description_es,
         "organizations": [organization_id],
         "themes": theme_ids,
+        "tags": tag_ids or [],
         "status": status_id,
     }
     if id:
