@@ -90,7 +90,7 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
     """Return (token, base_url), refreshing if expired."""
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
-        raise ValueError(f"env must be 'dev' or 'prod', got: {env!r}")
+        raise ValueError(f"env must be 'local', 'dev', or 'prod', got: {env!r}")
 
     now = time.time()
     if _cache["token"] and _cache["expires_at"] > now and _cache["env"] == env:
@@ -711,7 +711,7 @@ def create_update_dataset(
     description_pt: str,
     description_en: str,
     description_es: str,
-    organization_id: str,
+    organization_ids: list[str],
     theme_ids: list[str],
     status_id: str,
     tag_ids: list[str] | None = None,
@@ -723,7 +723,7 @@ def create_update_dataset(
 
     Pass id to update an existing record; omit to create new.
 
-    organizations, themes, and tags are ManyToMany fields — pass IDs from discover_ids.
+    organizations, themes, and tags are ManyToMany fields — pass lists of IDs from discover_ids/lookup_id.
 
     Returns: {"id": str, "slug": str}
     """
@@ -736,7 +736,7 @@ def create_update_dataset(
         "descriptionPt": description_pt,
         "descriptionEn": description_en,
         "descriptionEs": description_es,
-        "organizations": [organization_id],
+        "organizations": organization_ids,
         "themes": theme_ids,
         "tags": tag_ids or [],
         "status": status_id,
