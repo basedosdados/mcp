@@ -429,6 +429,8 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "cloud_tables": [{"id"}],
             "coverages": [{"id", "area_id", "area_slug", "datetime_ranges": [...]}],
             "updates": [{"id", "entity_id"}],
+            "published_by": [{"id", "email"}],
+            "data_cleaned_by": [{"id", "email"}],
           }
         }
       }
@@ -473,6 +475,8 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                                 updates(first: 10) {
                                     edges { node { id entity { id slug } } }
                                 }
+                                publishedBy(first: 10) { edges { node { id email } } }
+                                dataCleanedBy(first: 10) { edges { node { id email } } }
                             }
                         }
                     }
@@ -532,6 +536,14 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                     "entity_slug": upd["node"]["entity"]["slug"],
                 }
                 for upd in t["updates"]["edges"]
+            ],
+            "published_by": [
+                {"id": _strip_id(u["node"]["id"]), "email": u["node"]["email"]}
+                for u in t["publishedBy"]["edges"]
+            ],
+            "data_cleaned_by": [
+                {"id": _strip_id(u["node"]["id"]), "email": u["node"]["email"]}
+                for u in t["dataCleanedBy"]["edges"]
             ],
         }
 
