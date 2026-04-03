@@ -2,13 +2,17 @@
 databasis-mcp: MCP server wrapping the Data Basis GraphQL backend.
 
 Credentials (in priority order):
-  1. Env vars: EMAIL and PASSWORD
-  2. ~/.basedosdados/backend_credentials.json: {"local": {"email": ..., "password": ...}, "dev": {...}, "prod": {...}}
+  1. Env var: BACKEND_TOKEN  (bdtoken_...)
+  2. Env vars: EMAIL and PASSWORD  (legacy)
+  3. ~/.basedosdados/backend_credentials.json:
+     {"dev": {"token": "bdtoken_..."}, "prod": {...}}          ← preferred
+     {"dev": {"email": ..., "password": ...}, "prod": {...}}   ← legacy
 
 Environment:
-  ENV=dev (default) or ENV=prod
+  ENV=dev (default), ENV=local, or ENV=prod
 
-Token is cached in memory for 24 hours.
+JWT tokens (password path) are cached in memory for 24 hours.
+Backend tokens are used directly with no caching.
 """
 
 import json
@@ -57,48 +61,67 @@ _IDS_TTL = 30  # seconds
 # ---------------------------------------------------------------------------
 
 
-def _get_credentials(env: str) -> tuple[str, str]:
-    """
-    Return (email, password) for the given environment.
+def _get_credentials(env: str) -> tuple:
+    """Return a tagged credential tuple for the given environment.
+
+    Returns either:
+      ("token", "bdtoken_...")           ← use as Authorization: Token <value>
+      ("password", email, password)      ← exchange for JWT via tokenAuth mutation
 
     Lookup order:
-      1. Env vars EMAIL / PASSWORD (environment-agnostic override)
-      2. ~/.basedosdados/backend_credentials.json under key "dev" or "prod"
-         Falls back to flat {"email", "password"} structure for compatibility.
+      1. Env var BACKEND_TOKEN
+      2. Env vars EMAIL + PASSWORD
+      3. ~/.basedosdados/backend_credentials.json, env key, "token" field
+      4. ~/.basedosdados/backend_credentials.json, env key, "email"+"password" fields
     """
+    backend_token = os.environ.get("BACKEND_TOKEN")
+    if backend_token:
+        return ("token", backend_token)
+
     email = os.environ.get("EMAIL")
     password = os.environ.get("PASSWORD")
     if email and password:
-        return email, password
+        return ("password", email, password)
 
     creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
-        if env in data:
-            return data[env]["email"], data[env]["password"]
-        if "email" in data:  # flat fallback
-            return data["email"], data["password"]
+        env_data = data.get(env, data)  # fall back to flat structure
+        if "token" in env_data:
+            return ("token", env_data["token"])
+        if "email" in env_data and "password" in env_data:
+            return ("password", env_data["email"], env_data["password"])
 
     raise RuntimeError(
         f"No credentials found for env='{env}'. "
-        "Set EMAIL / PASSWORD env vars or create "
+        "Set BACKEND_TOKEN env var, or EMAIL+PASSWORD, or create "
         "~/.basedosdados/backend_credentials.json with "
-        '{"dev": {"email": "...", "password": "..."}, "prod": {...}}'
+        '{"dev": {"token": "bdtoken_..."}, "prod": {...}}'
     )
 
 
 def _get_token(env: str | None = None) -> tuple[str, str]:
-    """Return (token, base_url), refreshing if expired."""
+    """Return (auth_header_value, base_url).
+
+    For backend tokens: returns immediately with no HTTP call.
+    For password auth: exchanges email+password for a JWT, cached 24 hours.
+    """
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
         raise ValueError(f"env must be 'local', 'dev', or 'prod', got: {env!r}")
 
+    base_url = URLS[env]
+    creds = _get_credentials(env)
+
+    if creds[0] == "token":
+        return f"Token {creds[1]}", base_url
+
+    # Password path — use JWT with 24-hour cache.
+    _, email, password = creds
     now = time.time()
     if _cache["token"] and _cache["expires_at"] > now and _cache["env"] == env:
-        return _cache["token"], URLS[env]
+        return f"Bearer {_cache['token']}", base_url
 
-    email, password = _get_credentials(env)
-    base_url = URLS[env]
     r = requests.post(
         f"{base_url}/graphql",
         json={
@@ -114,14 +137,9 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
     if "errors" in data:
         raise RuntimeError(f"Auth error: {data['errors']}")
 
-    token = data["data"]["tokenAuth"]["token"]
-    _cache.update(
-        token=token,
-        expires_at=now + 86400,
-        env=env,
-        ids={},
-    )
-    return token, base_url
+    jwt = data["data"]["tokenAuth"]["token"]
+    _cache.update(token=jwt, expires_at=now + 86400, env=env, ids={})
+    return f"Bearer {jwt}", base_url
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +148,11 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
 
 
 def _gql(query: str, variables: dict | None = None, env: str | None = None) -> dict:
-    token, base_url = _get_token(env)
+    auth_header, base_url = _get_token(env)
     r = requests.post(
         f"{base_url}/graphql",
         json={"query": query, "variables": variables or {}},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": auth_header},
         timeout=60,
     )
     if not r.ok:
