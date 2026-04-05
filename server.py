@@ -439,6 +439,52 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
 
 
 @mcp.tool()
+def list_datasets(
+    organization_slug: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    List datasets, optionally filtered by organization slug.
+
+    Returns total count and a list of {id, slug, name_pt} for each dataset.
+
+    Args:
+        organization_slug: if provided, return only datasets for that organization
+        env: "dev", "local", or "prod"
+
+    Returns:
+        {"total": int, "datasets": [{"id": str, "slug": str, "name_pt": str}]}
+    """
+    if organization_slug:
+        q = """
+        query($slug: String!) {
+            allDataset(organizations_Slug: $slug) {
+                totalCount
+                edges { node { id slug namePt } }
+            }
+        }
+        """
+        data = _gql(q, {"slug": organization_slug}, env=env)
+    else:
+        q = """
+        {
+            allDataset {
+                totalCount
+                edges { node { id slug namePt } }
+            }
+        }
+        """
+        data = _gql(q, env=env)
+
+    result = data["allDataset"]
+    datasets = [
+        {"id": _strip_id(e["node"]["id"]), "slug": e["node"]["slug"], "name_pt": e["node"]["namePt"]}
+        for e in result["edges"]
+    ]
+    return {"total": result["totalCount"], "datasets": datasets}
+
+
+@mcp.tool()
 def get_dataset(slug: str, env: str = "dev") -> dict:
     """
     Fetch a dataset by slug and return its full metadata.
