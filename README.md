@@ -34,6 +34,16 @@ Permite que LLMs (Claude, GPT, etc.) interajam diretamente com o backend da Base
 
 Todas as ferramentas de escrita são **idempotentes**: passe um `id` existente para atualizar, omita para criar.
 
+### Ferramentas Prefect
+
+Consultam a instância Prefect 0.15 da Base dos Dados (`prefect.basedosdados.org`) via GraphQL. Requerem chave de API em `~/.basedosdados/backend_credentials.json` sob `prod.prefect`.
+
+| Ferramenta | Descrição |
+|---|---|
+| `list_flow_runs` | Lista execuções recentes; filtra por `state` (ex: `"Failed"`) e `flow_name` (substring) |
+| `get_flow_run_logs` | Retorna logs de uma execução por ID; filtra por `min_level` (`"DEBUG"`, `"INFO"`, `"WARNING"`, `"ERROR"`, `"CRITICAL"`) |
+| `get_failed_flow_runs` | Atalho: retorna as N execuções com falha mais recentes já com os logs embutidos |
+
 ---
 
 ## Requisitos
@@ -59,11 +69,13 @@ Formato do arquivo de credenciais:
 
 ```json
 {
-  "local": { "email": "...", "password": "..." },
+  "local": { "token": "bdtoken_..." },
   "dev":   { "email": "...", "password": "..." },
-  "prod":  { "email": "...", "password": "..." }
+  "prod":  { "email": "...", "password": "...", "prefect": "<prefect-api-key>" }
 }
 ```
+
+O campo `prefect` sob `prod` é necessário para as ferramentas Prefect. Tokens de backend (`bdtoken_...`) têm prioridade sobre email/senha quando presentes.
 
 ---
 
