@@ -446,21 +446,21 @@ def list_datasets(
     """
     List datasets, optionally filtered by organization slug.
 
-    Returns total count and a list of {id, slug, name_pt} for each dataset.
+    Returns total count and a list of {id, slug, name_pt, description} for each dataset.
 
     Args:
         organization_slug: if provided, return only datasets for that organization
         env: "dev", "local", or "prod"
 
     Returns:
-        {"total": int, "datasets": [{"id": str, "slug": str, "name_pt": str}]}
+        {"total": int, "datasets": [{"id": str, "slug": str, "name_pt": str, "description": str}]}
     """
     if organization_slug:
         q = """
         query($slug: String!) {
             allDataset(organizations_Slug: $slug) {
                 totalCount
-                edges { node { id slug namePt } }
+                edges { node { id slug namePt description } }
             }
         }
         """
@@ -470,7 +470,7 @@ def list_datasets(
         {
             allDataset {
                 totalCount
-                edges { node { id slug namePt } }
+                edges { node { id slug namePt description } }
             }
         }
         """
@@ -478,7 +478,12 @@ def list_datasets(
 
     result = data["allDataset"]
     datasets = [
-        {"id": _strip_id(e["node"]["id"]), "slug": e["node"]["slug"], "name_pt": e["node"]["namePt"]}
+        {
+            "id": _strip_id(e["node"]["id"]),
+            "slug": e["node"]["slug"],
+            "name_pt": e["node"]["namePt"],
+            "description": e["node"].get("description") or "",
+        }
         for e in result["edges"]
     ]
     return {"total": result["totalCount"], "datasets": datasets}
@@ -1612,6 +1617,174 @@ def get_authenticated_account(env: str = "dev") -> dict:
         n = edges[0]["node"]
         return {"id": _strip_id(n["id"]), "email": n["email"]}
     raise RuntimeError(f"Account not found for email: {email}")
+
+
+# ---------------------------------------------------------------------------
+# Prefect helpers
+# ---------------------------------------------------------------------------
+
+PREFECT_URL = "https://prefect.basedosdados.org/api"
+
+
+def _prefect_key() -> str:
+    creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
+    if creds_path.exists():
+        data = json.loads(creds_path.read_text())
+        key = data.get("prod", {}).get("prefect")
+        if key:
+            return key
+    raise RuntimeError(
+        "No Prefect API key found. Add 'prefect' key under 'prod' in "
+        "~/.basedosdados/backend_credentials.json"
+    )
+
+
+def _prefect_gql(query: str, variables: dict | None = None) -> dict:
+    r = requests.post(
+        PREFECT_URL,
+        json={"query": query, "variables": variables or {}},
+        headers={"Authorization": f"Bearer {_prefect_key()}"},
+        timeout=60,
+    )
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code}:\n{r.text}")
+    data = r.json()
+    if "errors" in data:
+        raise RuntimeError(json.dumps(data["errors"], indent=2))
+    return data["data"]
+
+
+# ---------------------------------------------------------------------------
+# Prefect tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def list_flow_runs(
+    state: str | None = None,
+    flow_name: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """List recent Prefect flow runs.
+
+    Args:
+        state: Filter by state, e.g. 'Failed', 'Success', 'Running'. None = all.
+        flow_name: Filter by flow name substring (case-sensitive). None = all.
+        limit: Max number of runs to return (default 20, max 100).
+    """
+    limit = min(limit, 100)
+
+    where_parts = []
+    if state:
+        where_parts.append(f'state: {{_eq: "{state}"}}')
+    if flow_name:
+        where_parts.append(f'flow: {{name: {{_like: "%{flow_name}%"}}}}')
+    where_clause = "{" + ", ".join(where_parts) + "}" if where_parts else "{}"
+
+    q = f"""
+    {{
+        flow_run(
+            where: {where_clause},
+            order_by: {{end_time: desc_nulls_last}},
+            limit: {limit}
+        ) {{
+            id
+            name
+            state
+            state_message
+            start_time
+            end_time
+            flow {{ name }}
+        }}
+    }}
+    """
+    runs = _prefect_gql(q)["flow_run"]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "flow_name": r["flow"]["name"],
+            "state": r["state"],
+            "state_message": r["state_message"],
+            "start_time": r["start_time"],
+            "end_time": r["end_time"],
+        }
+        for r in runs
+    ]
+
+
+@mcp.tool()
+def get_flow_run_logs(
+    flow_run_id: str,
+    min_level: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Get logs for a specific Prefect flow run.
+
+    Args:
+        flow_run_id: The UUID of the flow run.
+        min_level: Minimum log level to return: 'DEBUG', 'INFO', 'WARNING', 'ERROR',
+                   'CRITICAL'. None = all levels.
+        limit: Max number of log entries to return (default 200, max 500).
+    """
+    limit = min(limit, 500)
+
+    level_order = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    level_filter = ""
+    if min_level:
+        upper = min_level.upper()
+        if upper not in level_order:
+            raise ValueError(f"min_level must be one of {level_order}; got {min_level!r}")
+        included = level_order[level_order.index(upper):]
+        levels_gql = "[" + ", ".join(f'"{l}"' for l in included) + "]"
+        level_filter = f", level: {{_in: {levels_gql}}}"
+
+    q = f"""
+    {{
+        log(
+            where: {{flow_run_id: {{_eq: "{flow_run_id}"}}{level_filter}}},
+            order_by: {{timestamp: asc}},
+            limit: {limit}
+        ) {{
+            timestamp
+            level
+            name
+            message
+        }}
+    }}
+    """
+    return _prefect_gql(q)["log"]
+
+
+@mcp.tool()
+def get_failed_flow_runs(
+    flow_name: str | None = None,
+    runs_limit: int = 5,
+    logs_per_run: int = 100,
+    min_log_level: str = "ERROR",
+) -> list[dict]:
+    """Get recent failed Prefect flow runs together with their logs.
+
+    Args:
+        flow_name: Filter by flow name substring. None = all flows.
+        runs_limit: Max number of failed runs to return (default 5, max 20).
+        logs_per_run: Max log entries per run (default 100, max 200).
+        min_log_level: Minimum log level to include: 'DEBUG', 'INFO', 'WARNING',
+                       'ERROR', 'CRITICAL' (default 'ERROR').
+    """
+    runs_limit = min(runs_limit, 20)
+    logs_per_run = min(logs_per_run, 200)
+
+    runs = list_flow_runs(state="Failed", flow_name=flow_name, limit=runs_limit)
+    result = []
+    for run in runs:
+        logs = get_flow_run_logs(
+            flow_run_id=run["id"],
+            min_level=min_log_level,
+            limit=logs_per_run,
+        )
+        result.append({**run, "logs": logs})
+    return result
 
 
 # ---------------------------------------------------------------------------
