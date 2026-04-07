@@ -2,13 +2,17 @@
 databasis-mcp: MCP server wrapping the Data Basis GraphQL backend.
 
 Credentials (in priority order):
-  1. Env vars: EMAIL and PASSWORD
-  2. ~/.basedosdados/backend_credentials.json: {"local": {"email": ..., "password": ...}, "dev": {...}, "prod": {...}}
+  1. Env var: BACKEND_TOKEN  (bdtoken_...)
+  2. Env vars: EMAIL and PASSWORD  (legacy)
+  3. ~/.basedosdados/backend_credentials.json:
+     {"dev": {"token": "bdtoken_..."}, "prod": {...}}          ← preferred
+     {"dev": {"email": ..., "password": ...}, "prod": {...}}   ← legacy
 
 Environment:
-  ENV=dev (default) or ENV=prod
+  ENV=dev (default), ENV=local, or ENV=prod
 
-Token is cached in memory for 24 hours.
+JWT tokens (password path) are cached in memory for 24 hours.
+Backend tokens are used directly with no caching.
 """
 
 import json
@@ -57,48 +61,67 @@ _IDS_TTL = 30  # seconds
 # ---------------------------------------------------------------------------
 
 
-def _get_credentials(env: str) -> tuple[str, str]:
-    """
-    Return (email, password) for the given environment.
+def _get_credentials(env: str) -> tuple:
+    """Return a tagged credential tuple for the given environment.
+
+    Returns either:
+      ("token", "bdtoken_...")           ← use as Authorization: Token <value>
+      ("password", email, password)      ← exchange for JWT via tokenAuth mutation
 
     Lookup order:
-      1. Env vars EMAIL / PASSWORD (environment-agnostic override)
-      2. ~/.basedosdados/backend_credentials.json under key "dev" or "prod"
-         Falls back to flat {"email", "password"} structure for compatibility.
+      1. Env var BACKEND_TOKEN
+      2. Env vars EMAIL + PASSWORD
+      3. ~/.basedosdados/backend_credentials.json, env key, "token" field
+      4. ~/.basedosdados/backend_credentials.json, env key, "email"+"password" fields
     """
+    backend_token = os.environ.get("BACKEND_TOKEN")
+    if backend_token:
+        return ("token", backend_token)
+
     email = os.environ.get("EMAIL")
     password = os.environ.get("PASSWORD")
     if email and password:
-        return email, password
+        return ("password", email, password)
 
     creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
-        if env in data:
-            return data[env]["email"], data[env]["password"]
-        if "email" in data:  # flat fallback
-            return data["email"], data["password"]
+        env_data = data.get(env, data)  # fall back to flat structure
+        if "token" in env_data:
+            return ("token", env_data["token"])
+        if "email" in env_data and "password" in env_data:
+            return ("password", env_data["email"], env_data["password"])
 
     raise RuntimeError(
         f"No credentials found for env='{env}'. "
-        "Set EMAIL / PASSWORD env vars or create "
+        "Set BACKEND_TOKEN env var, or EMAIL+PASSWORD, or create "
         "~/.basedosdados/backend_credentials.json with "
-        '{"dev": {"email": "...", "password": "..."}, "prod": {...}}'
+        '{"dev": {"token": "bdtoken_..."}, "prod": {...}}'
     )
 
 
 def _get_token(env: str | None = None) -> tuple[str, str]:
-    """Return (token, base_url), refreshing if expired."""
+    """Return (auth_header_value, base_url).
+
+    For backend tokens: returns immediately with no HTTP call.
+    For password auth: exchanges email+password for a JWT, cached 24 hours.
+    """
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
         raise ValueError(f"env must be 'local', 'dev', or 'prod', got: {env!r}")
 
+    base_url = URLS[env]
+    creds = _get_credentials(env)
+
+    if creds[0] == "token":
+        return f"Token {creds[1]}", base_url
+
+    # Password path — use JWT with 24-hour cache.
+    _, email, password = creds
     now = time.time()
     if _cache["token"] and _cache["expires_at"] > now and _cache["env"] == env:
-        return _cache["token"], URLS[env]
+        return f"Bearer {_cache['token']}", base_url
 
-    email, password = _get_credentials(env)
-    base_url = URLS[env]
     r = requests.post(
         f"{base_url}/graphql",
         json={
@@ -114,14 +137,9 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
     if "errors" in data:
         raise RuntimeError(f"Auth error: {data['errors']}")
 
-    token = data["data"]["tokenAuth"]["token"]
-    _cache.update(
-        token=token,
-        expires_at=now + 86400,
-        env=env,
-        ids={},
-    )
-    return token, base_url
+    jwt = data["data"]["tokenAuth"]["token"]
+    _cache.update(token=jwt, expires_at=now + 86400, env=env, ids={})
+    return f"Bearer {jwt}", base_url
 
 
 # ---------------------------------------------------------------------------
@@ -130,11 +148,11 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
 
 
 def _gql(query: str, variables: dict | None = None, env: str | None = None) -> dict:
-    token, base_url = _get_token(env)
+    auth_header, base_url = _get_token(env)
     r = requests.post(
         f"{base_url}/graphql",
         json={"query": query, "variables": variables or {}},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": auth_header},
         timeout=60,
     )
     if not r.ok:
@@ -418,6 +436,57 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
     name = node.get("namePt") or node.get("name") or node.get("slug")
     return {"slug": node["slug"], "id": _strip_id(node["id"]), "name": name}
 
+
+
+@mcp.tool()
+def list_datasets(
+    organization_slug: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    List datasets, optionally filtered by organization slug.
+
+    Returns total count and a list of {id, slug, name_pt, description} for each dataset.
+
+    Args:
+        organization_slug: if provided, return only datasets for that organization
+        env: "dev", "local", or "prod"
+
+    Returns:
+        {"total": int, "datasets": [{"id": str, "slug": str, "name_pt": str, "description": str}]}
+    """
+    if organization_slug:
+        q = """
+        query($slug: String!) {
+            allDataset(organizations_Slug: $slug) {
+                totalCount
+                edges { node { id slug namePt description } }
+            }
+        }
+        """
+        data = _gql(q, {"slug": organization_slug}, env=env)
+    else:
+        q = """
+        {
+            allDataset {
+                totalCount
+                edges { node { id slug namePt description } }
+            }
+        }
+        """
+        data = _gql(q, env=env)
+
+    result = data["allDataset"]
+    datasets = [
+        {
+            "id": _strip_id(e["node"]["id"]),
+            "slug": e["node"]["slug"],
+            "name_pt": e["node"]["namePt"],
+            "description": e["node"].get("description") or "",
+        }
+        for e in result["edges"]
+    ]
+    return {"total": result["totalCount"], "datasets": datasets}
 
 
 @mcp.tool()
@@ -1548,6 +1617,174 @@ def get_authenticated_account(env: str = "dev") -> dict:
         n = edges[0]["node"]
         return {"id": _strip_id(n["id"]), "email": n["email"]}
     raise RuntimeError(f"Account not found for email: {email}")
+
+
+# ---------------------------------------------------------------------------
+# Prefect helpers
+# ---------------------------------------------------------------------------
+
+PREFECT_URL = "https://prefect.basedosdados.org/api"
+
+
+def _prefect_key() -> str:
+    creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
+    if creds_path.exists():
+        data = json.loads(creds_path.read_text())
+        key = data.get("prod", {}).get("prefect")
+        if key:
+            return key
+    raise RuntimeError(
+        "No Prefect API key found. Add 'prefect' key under 'prod' in "
+        "~/.basedosdados/backend_credentials.json"
+    )
+
+
+def _prefect_gql(query: str, variables: dict | None = None) -> dict:
+    r = requests.post(
+        PREFECT_URL,
+        json={"query": query, "variables": variables or {}},
+        headers={"Authorization": f"Bearer {_prefect_key()}"},
+        timeout=60,
+    )
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code}:\n{r.text}")
+    data = r.json()
+    if "errors" in data:
+        raise RuntimeError(json.dumps(data["errors"], indent=2))
+    return data["data"]
+
+
+# ---------------------------------------------------------------------------
+# Prefect tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def list_flow_runs(
+    state: str | None = None,
+    flow_name: str | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """List recent Prefect flow runs.
+
+    Args:
+        state: Filter by state, e.g. 'Failed', 'Success', 'Running'. None = all.
+        flow_name: Filter by flow name substring (case-sensitive). None = all.
+        limit: Max number of runs to return (default 20, max 100).
+    """
+    limit = min(limit, 100)
+
+    where_parts = []
+    if state:
+        where_parts.append(f'state: {{_eq: "{state}"}}')
+    if flow_name:
+        where_parts.append(f'flow: {{name: {{_like: "%{flow_name}%"}}}}')
+    where_clause = "{" + ", ".join(where_parts) + "}" if where_parts else "{}"
+
+    q = f"""
+    {{
+        flow_run(
+            where: {where_clause},
+            order_by: {{end_time: desc_nulls_last}},
+            limit: {limit}
+        ) {{
+            id
+            name
+            state
+            state_message
+            start_time
+            end_time
+            flow {{ name }}
+        }}
+    }}
+    """
+    runs = _prefect_gql(q)["flow_run"]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "flow_name": r["flow"]["name"],
+            "state": r["state"],
+            "state_message": r["state_message"],
+            "start_time": r["start_time"],
+            "end_time": r["end_time"],
+        }
+        for r in runs
+    ]
+
+
+@mcp.tool()
+def get_flow_run_logs(
+    flow_run_id: str,
+    min_level: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """Get logs for a specific Prefect flow run.
+
+    Args:
+        flow_run_id: The UUID of the flow run.
+        min_level: Minimum log level to return: 'DEBUG', 'INFO', 'WARNING', 'ERROR',
+                   'CRITICAL'. None = all levels.
+        limit: Max number of log entries to return (default 200, max 500).
+    """
+    limit = min(limit, 500)
+
+    level_order = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+    level_filter = ""
+    if min_level:
+        upper = min_level.upper()
+        if upper not in level_order:
+            raise ValueError(f"min_level must be one of {level_order}; got {min_level!r}")
+        included = level_order[level_order.index(upper):]
+        levels_gql = "[" + ", ".join(f'"{l}"' for l in included) + "]"
+        level_filter = f", level: {{_in: {levels_gql}}}"
+
+    q = f"""
+    {{
+        log(
+            where: {{flow_run_id: {{_eq: "{flow_run_id}"}}{level_filter}}},
+            order_by: {{timestamp: asc}},
+            limit: {limit}
+        ) {{
+            timestamp
+            level
+            name
+            message
+        }}
+    }}
+    """
+    return _prefect_gql(q)["log"]
+
+
+@mcp.tool()
+def get_failed_flow_runs(
+    flow_name: str | None = None,
+    runs_limit: int = 5,
+    logs_per_run: int = 100,
+    min_log_level: str = "ERROR",
+) -> list[dict]:
+    """Get recent failed Prefect flow runs together with their logs.
+
+    Args:
+        flow_name: Filter by flow name substring. None = all flows.
+        runs_limit: Max number of failed runs to return (default 5, max 20).
+        logs_per_run: Max log entries per run (default 100, max 200).
+        min_log_level: Minimum log level to include: 'DEBUG', 'INFO', 'WARNING',
+                       'ERROR', 'CRITICAL' (default 'ERROR').
+    """
+    runs_limit = min(runs_limit, 20)
+    logs_per_run = min(logs_per_run, 200)
+
+    runs = list_flow_runs(state="Failed", flow_name=flow_name, limit=runs_limit)
+    result = []
+    for run in runs:
+        logs = get_flow_run_logs(
+            flow_run_id=run["id"],
+            min_level=min_log_level,
+            limit=logs_per_run,
+        )
+        result.append({**run, "logs": logs})
+    return result
 
 
 # ---------------------------------------------------------------------------
