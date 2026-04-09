@@ -1,87 +1,138 @@
 # databasis-mcp
 
-Servidor MCP (*Model Context Protocol*) que expõe a API GraphQL do backend da [Base dos Dados](https://basedosdados.org) como ferramentas para agentes de IA.
+Servidor MCP (*Model Context Protocol*) que expõe a API da [Base dos Dados](https://basedosdados.org) como ferramentas para agentes de IA.
 
-## O que faz
+Oferece dois conjuntos de ferramentas:
 
-Permite que LLMs (Claude, GPT, etc.) interajam diretamente com o backend da Base dos Dados para consultar e registrar metadados de datasets, tabelas, colunas, níveis de observação, coberturas e tabelas na nuvem.
+- **Consumo de dados** — busca e consulta de dados públicos via metadados e BigQuery. Não requer conta na BD.
+- **Cadastro de dados** — criação e atualização de metadados no backend. Requer conta e credenciais BD.
+
+---
+
+## Consumo de dados
+
+Permite buscar datasets, consultar metadados e executar queries SQL nas tabelas públicas da Base dos Dados via BigQuery.
+
+### Requisitos
+
+- Python 3.11+
+- Conta no Google Cloud Platform (GCP) com um projeto criado
+- `gcloud` CLI instalado e autenticado:
+
+```bash
+gcloud auth application-default login
+```
+
+### Ferramentas disponíveis
+
+| Ferramenta | Descrição |
+|---|---|
+| `search_datasets` | Busca datasets por nome (sem autenticação) |
+| `list_datasets` | Lista datasets, opcionalmente filtrado por organização |
+| `get_dataset` | Retorna metadados completos de um dataset, incluindo referências BigQuery |
+| `lookup_id` | Busca ID de uma entidade de referência por slug |
+| `discover_ids` | Resolve slugs → IDs de referência (áreas, entidades, etc.) |
+| `get_raw_data_sources` | Lista fontes brutas de um dataset |
+| `preview_table` | Visualiza as primeiras linhas de uma tabela via BigQuery |
+| `query_bigquery` | Executa SQL nas tabelas `basedosdados.*` no BigQuery |
+
+Todas as ferramentas de leitura de metadados não requerem autenticação de backend.
+
+### Projeto de faturamento GCP
+
+As ferramentas `preview_table` e `query_bigquery` executam queries no BigQuery cobradas ao seu projeto GCP. Forneça o projeto de faturamento em ordem de prioridade:
+
+1. Parâmetro `billing_project` na chamada da ferramenta
+2. Variável de ambiente `GCP_PROJECT_ID`
+3. Campo `gcp_project` em `~/.basedosdados/backend_credentials.json`:
+
+```json
+{
+  "gcp_project": "meu-projeto-gcp"
+}
+```
+
+### Exemplo de uso
+
+```
+1. search_datasets("educação") → encontra datasets relevantes
+2. get_dataset("br_inep_censo_escolar") → vê tabelas disponíveis e referências BigQuery
+3. preview_table("br_inep_censo_escolar", "escola") → visualiza as primeiras linhas
+4. query_bigquery("SELECT uf, COUNT(*) as n FROM `basedosdados.br_inep_censo_escolar.escola` GROUP BY uf LIMIT 10")
+```
+
+---
+
+## Cadastro de dados
+
+Permite criar e atualizar metadados de datasets, tabelas, colunas e demais entidades no backend da Base dos Dados.
+
+### Requisitos
+
+- Python 3.11+
+- Conta no backend da BD com credenciais configuradas
 
 ### Ferramentas disponíveis
 
 | Ferramenta | Descrição |
 |---|---|
 | `auth` | Autentica e armazena token em memória (24h) |
-| `discover_ids` | Resolve slugs → IDs de referência (áreas, entidades, etc.) |
-| `lookup_area` | Busca ID de uma área geográfica por slug |
-| `get_dataset` | Retorna metadados de um dataset |
+| `get_authenticated_account` | Retorna conta autenticada no momento |
 | `create_update_dataset` | Cria ou atualiza dataset |
 | `create_update_table` | Cria ou atualiza tabela |
-| `upload_columns` | Registra colunas em lote a partir de lista |
 | `upload_columns_from_sheet` | Registra colunas a partir de planilha do Google Sheets |
-| `update_column` | Atualiza coluna individual (incluindo limpar OL via `clear_observation_level`) |
+| `update_column` | Atualiza coluna individual |
 | `delete_column` | Remove coluna |
 | `delete_table` | Remove tabela |
 | `create_update_observation_level` | Cria ou atualiza nível de observação |
-| `create_update_cloud_table` | Cria ou atualiza tabela na nuvem (BigQuery) |
-| `create_update_coverage` | Cria ou atualiza cobertura |
+| `create_update_cloud_table` | Cria ou atualiza referência BigQuery de uma tabela |
+| `create_update_coverage` | Cria ou atualiza cobertura geográfica |
 | `create_update_datetime_range` | Cria ou atualiza intervalo temporal |
 | `create_update_update` | Cria ou atualiza metadados de atualização |
+| `create_update_raw_data_source` | Cria ou atualiza fonte de dados bruta |
+| `create_update_tag` | Cria ou atualiza tag |
+| `create_update_theme` | Cria ou atualiza tema |
+| `create_update_organization` | Cria ou atualiza organização |
 | `reorder_tables` | Define a ordem de exibição das tabelas em um dataset |
-| `reorder_observation_levels` | Define a ordem de exibição dos níveis de observação em uma tabela |
-| `reorder_columns` | Define a ordem de exibição das colunas em uma tabela |
-| `get_raw_data_sources` | Lista fontes brutas de um dataset |
-| `get_authenticated_account` | Retorna conta autenticada no momento |
+| `reorder_observation_levels` | Define a ordem de exibição dos níveis de observação |
+| `reorder_columns` | Define a ordem de exibição das colunas |
 
 Todas as ferramentas de escrita são **idempotentes**: passe um `id` existente para atualizar, omita para criar.
 
 ### Ferramentas Prefect
 
-Consultam a instância Prefect 0.15 da Base dos Dados (`prefect.basedosdados.org`) via GraphQL. Requerem chave de API em `~/.basedosdados/backend_credentials.json` sob `prod.prefect`.
+Consultam a instância Prefect da Base dos Dados. Requerem chave de API em `~/.basedosdados/backend_credentials.json` sob `prod.prefect`.
 
 | Ferramenta | Descrição |
 |---|---|
-| `list_flow_runs` | Lista execuções recentes; filtra por `state` (ex: `"Failed"`) e `flow_name` (substring) |
-| `get_flow_run_logs` | Retorna logs de uma execução por ID; filtra por `min_level` (`"DEBUG"`, `"INFO"`, `"WARNING"`, `"ERROR"`, `"CRITICAL"`) |
-| `get_failed_flow_runs` | Atalho: retorna as N execuções com falha mais recentes já com os logs embutidos |
+| `list_flow_runs` | Lista execuções recentes; filtra por estado e nome |
+| `get_flow_run_logs` | Retorna logs de uma execução por ID |
+| `get_failed_flow_runs` | Retorna execuções com falha com logs embutidos |
 
----
-
-## Requisitos
-
-- Python 3.11+
-- [`fastmcp`](https://github.com/jlowin/fastmcp) >= 2.0
-- `requests` >= 2.31
-
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## Credenciais
+### Credenciais de backend
 
 O servidor lê credenciais na seguinte ordem de prioridade:
 
-1. **Variáveis de ambiente:** `EMAIL` e `PASSWORD`
-2. **Arquivo local:** `~/.basedosdados/backend_credentials.json`
+1. **Variável de ambiente:** `BACKEND_TOKEN` (`bdtoken_...`)
+2. **Variáveis de ambiente:** `EMAIL` e `PASSWORD` (legado)
+3. **Arquivo local:** `~/.basedosdados/backend_credentials.json`
 
-Formato do arquivo de credenciais:
+Formato do arquivo:
 
 ```json
 {
+  "gcp_project": "meu-projeto-gcp",
   "local": { "token": "bdtoken_..." },
   "dev":   { "email": "...", "password": "..." },
   "prod":  { "email": "...", "password": "...", "prefect": "<prefect-api-key>" }
 }
 ```
 
-O campo `prefect` sob `prod` é necessário para as ferramentas Prefect. Tokens de backend (`bdtoken_...`) têm prioridade sobre email/senha quando presentes.
+O campo `gcp_project` é usado pelas ferramentas BigQuery. O campo `prefect` sob `prod` é necessário para as ferramentas Prefect.
 
----
+### Ambientes
 
-## Ambientes
-
-Cada ferramenta aceita um parâmetro `env` com os valores:
+Cada ferramenta de cadastro aceita um parâmetro `env`:
 
 | Valor | URL |
 |---|---|
@@ -91,37 +142,89 @@ Cada ferramenta aceita um parâmetro `env` com os valores:
 
 ---
 
-## Rodando localmente
+## Instalação
 
 ```bash
-python server.py
+pip install -r requirements.txt
 ```
-
-O servidor inicia no modo stdio (padrão do MCP).
 
 ---
 
-## Integração com Claude Code
+## Integração com clientes MCP
 
-Adicione ao arquivo `~/.claude/settings.json` (ou `settings.local.json`):
+As credenciais são lidas automaticamente de `~/.basedosdados/backend_credentials.json` — não é necessário passá-las como variáveis de ambiente.
+
+Substitua `/caminho/para/python` e `/caminho/para/mcp/server.py` pelos caminhos corretos na sua máquina.
+
+### Claude Code (CLI)
+
+```bash
+claude mcp add databasis -- /caminho/para/python /caminho/para/mcp/server.py
+```
+
+Ou adicione manualmente ao `~/.claude/settings.json`:
 
 ```json
 {
   "mcpServers": {
     "databasis": {
       "type": "stdio",
-      "command": "/caminho/para/python3.11",
-      "args": ["/caminho/para/mcp/server.py"],
-      "env": {}
+      "command": "/caminho/para/python",
+      "args": ["/caminho/para/mcp/server.py"]
     }
   }
 }
 ```
 
-As credenciais são lidas automaticamente de `~/.basedosdados/backend_credentials.json` — não é necessário passá-las como variáveis de ambiente.
+Reconecte com `/mcp` após salvar.
 
-Após salvar, reconecte com `/mcp` no Claude Code.
+### Claude Desktop
 
-## Integração com outros clientes MCP
+Adicione ao `claude_desktop_config.json`:
 
-Qualquer cliente compatível com MCP (Cursor, Windsurf, Continue, etc.) pode usar o servidor via stdio com o mesmo comando acima. Consulte a documentação do seu cliente para o formato exato de configuração.
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "databasis": {
+      "command": "/caminho/para/python",
+      "args": ["/caminho/para/mcp/server.py"]
+    }
+  }
+}
+```
+
+### VS Code
+
+Adicione ao `.vscode/mcp.json` no seu workspace (ou nas configurações globais do usuário):
+
+```json
+{
+  "servers": {
+    "databasis": {
+      "type": "stdio",
+      "command": "/caminho/para/python",
+      "args": ["/caminho/para/mcp/server.py"]
+    }
+  }
+}
+```
+
+### Cursor / Windsurf / Continue
+
+Qualquer cliente compatível com MCP via stdio pode usar o mesmo padrão:
+
+```json
+{
+  "mcpServers": {
+    "databasis": {
+      "command": "/caminho/para/python",
+      "args": ["/caminho/para/mcp/server.py"]
+    }
+  }
+}
+```
+
+Consulte a documentação do seu cliente para o local exato do arquivo de configuração.
