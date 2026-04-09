@@ -2,16 +2,41 @@
 
 Servidor MCP (*Model Context Protocol*) que expõe a API da [Base dos Dados](https://basedosdados.org) como ferramentas para agentes de IA.
 
-Oferece dois conjuntos de ferramentas:
+Oferece três conjuntos de ferramentas:
 
-- **Consumo de dados** — busca e consulta de dados públicos via metadados e BigQuery. Não requer conta na BD.
-- **Cadastro de dados** — criação e atualização de metadados no backend. Requer conta e credenciais BD.
+- **Consumo de metadados** — busca e consulta de metadados públicos. Não requer conta.
+- **Consumo de dados** — execução de queries SQL nas tabelas públicas via BigQuery. Requer conta GCP.
+- **Cadastro de dados** — criação e atualização de metadados no backend. Requer conta BD.
+
+---
+
+## Consumo de metadados
+
+Permite buscar conjuntos e consultar metadados sem qualquer autenticação.
+
+### Ferramentas disponíveis
+
+| Ferramenta | Descrição |
+|---|---|
+| `search_datasets` | Busca conjuntos por nome |
+| `list_datasets` | Lista conjuntos, opcionalmente filtrado por organização |
+| `get_dataset` | Retorna metadados completos de um conjunto, incluindo referências BigQuery |
+| `lookup_id` | Busca ID de uma entidade de referência por slug |
+| `discover_ids` | Resolve slugs → IDs de referência (áreas, entidades, etc.) |
+| `get_raw_data_sources` | Lista fontes brutas de um conjunto |
+
+### Exemplo de uso
+
+```
+1. search_datasets("educação") → encontra conjuntos relevantes
+2. get_dataset("br_inep_censo_escolar") → vê tabelas disponíveis e referências BigQuery
+```
 
 ---
 
 ## Consumo de dados
 
-Permite buscar datasets, consultar metadados e executar queries SQL nas tabelas públicas da Base dos Dados via BigQuery.
+Permite executar queries SQL nas tabelas públicas da Base dos Dados via BigQuery.
 
 ### Requisitos
 
@@ -27,24 +52,16 @@ gcloud auth application-default login
 
 | Ferramenta | Descrição |
 |---|---|
-| `search_datasets` | Busca datasets por nome (sem autenticação) |
-| `list_datasets` | Lista datasets, opcionalmente filtrado por organização |
-| `get_dataset` | Retorna metadados completos de um dataset, incluindo referências BigQuery |
-| `lookup_id` | Busca ID de uma entidade de referência por slug |
-| `discover_ids` | Resolve slugs → IDs de referência (áreas, entidades, etc.) |
-| `get_raw_data_sources` | Lista fontes brutas de um dataset |
 | `preview_table` | Visualiza as primeiras linhas de uma tabela via BigQuery |
 | `query_bigquery` | Executa SQL nas tabelas `basedosdados.*` no BigQuery |
 
-Todas as ferramentas de leitura de metadados não requerem autenticação de backend.
-
 ### Projeto de faturamento GCP
 
-As ferramentas `preview_table` e `query_bigquery` executam queries no BigQuery cobradas ao seu projeto GCP. Forneça o projeto de faturamento em ordem de prioridade:
+As queries são cobradas ao seu projeto GCP. Forneça o projeto de faturamento em ordem de prioridade:
 
 1. Parâmetro `billing_project` na chamada da ferramenta
 2. Variável de ambiente `GCP_PROJECT_ID`
-3. Campo `gcp_project` em `~/.basedosdados/backend_credentials.json`:
+3. Campo `gcp_project` em `~/.basedosdados/credentials.json`:
 
 ```json
 {
@@ -55,17 +72,16 @@ As ferramentas `preview_table` e `query_bigquery` executam queries no BigQuery c
 ### Exemplo de uso
 
 ```
-1. search_datasets("educação") → encontra datasets relevantes
-2. get_dataset("br_inep_censo_escolar") → vê tabelas disponíveis e referências BigQuery
-3. preview_table("br_inep_censo_escolar", "escola") → visualiza as primeiras linhas
-4. query_bigquery("SELECT uf, COUNT(*) as n FROM `basedosdados.br_inep_censo_escolar.escola` GROUP BY uf LIMIT 10")
+1. get_dataset("br_inep_censo_escolar") → vê referências BigQuery (gcp_dataset_id, gcp_table_id)
+2. preview_table("br_inep_censo_escolar", "escola") → visualiza as primeiras linhas
+3. query_bigquery("SELECT uf, COUNT(*) as n FROM `basedosdados.br_inep_censo_escolar.escola` GROUP BY uf LIMIT 10")
 ```
 
 ---
 
 ## Cadastro de dados
 
-Permite criar e atualizar metadados de datasets, tabelas, colunas e demais entidades no backend da Base dos Dados.
+Permite criar e atualizar metadados de conjuntos, tabelas, colunas e demais entidades no backend da Base dos Dados.
 
 ### Requisitos
 
@@ -78,7 +94,7 @@ Permite criar e atualizar metadados de datasets, tabelas, colunas e demais entid
 |---|---|
 | `auth` | Autentica e armazena token em memória (24h) |
 | `get_authenticated_account` | Retorna conta autenticada no momento |
-| `create_update_dataset` | Cria ou atualiza dataset |
+| `create_update_dataset` | Cria ou atualiza conjunto |
 | `create_update_table` | Cria ou atualiza tabela |
 | `upload_columns_from_sheet` | Registra colunas a partir de planilha do Google Sheets |
 | `update_column` | Atualiza coluna individual |
@@ -93,7 +109,7 @@ Permite criar e atualizar metadados de datasets, tabelas, colunas e demais entid
 | `create_update_tag` | Cria ou atualiza tag |
 | `create_update_theme` | Cria ou atualiza tema |
 | `create_update_organization` | Cria ou atualiza organização |
-| `reorder_tables` | Define a ordem de exibição das tabelas em um dataset |
+| `reorder_tables` | Define a ordem de exibição das tabelas em um conjunto |
 | `reorder_observation_levels` | Define a ordem de exibição dos níveis de observação |
 | `reorder_columns` | Define a ordem de exibição das colunas |
 
@@ -101,7 +117,7 @@ Todas as ferramentas de escrita são **idempotentes**: passe um `id` existente p
 
 ### Ferramentas Prefect
 
-Consultam a instância Prefect da Base dos Dados. Requerem chave de API em `~/.basedosdados/backend_credentials.json` sob `prod.prefect`.
+Consultam a instância Prefect da Base dos Dados. Requerem chave de API em `~/.basedosdados/credentials.json` sob `prod.prefect`.
 
 | Ferramenta | Descrição |
 |---|---|
@@ -115,16 +131,17 @@ O servidor lê credenciais na seguinte ordem de prioridade:
 
 1. **Variável de ambiente:** `BACKEND_TOKEN` (`bdtoken_...`)
 2. **Variáveis de ambiente:** `EMAIL` e `PASSWORD` (legado)
-3. **Arquivo local:** `~/.basedosdados/backend_credentials.json`
+3. **Arquivo local:** `~/.basedosdados/credentials.json`
 
 Formato do arquivo:
 
 ```json
 {
-  "gcp_project": "meu-projeto-gcp",
-  "local": { "token": "bdtoken_..." },
-  "dev":   { "email": "...", "password": "..." },
-  "prod":  { "email": "...", "password": "...", "prefect": "<prefect-api-key>" }
+  "gcp_project": "<billing-project-id>",
+  "local":   { "token": "bdtoken_..." },
+  "dev":     { "email": "...", "password": "..." },
+  "staging": { "email": "...", "password": "..." },
+  "prod":    { "email": "...", "password": "...", "prefect": "<prefect-api-key>" }
 }
 ```
 
@@ -137,7 +154,8 @@ Cada ferramenta de cadastro aceita um parâmetro `env`:
 | Valor | URL |
 |---|---|
 | `local` | `http://localhost:8080` |
-| `dev` *(padrão)* | `https://development.backend.basedosdados.org` |
+| `dev` | `https://development.backend.basedosdados.org` |
+| `staging` *(padrão)* | `https://staging.backend.basedosdados.org` |
 | `prod` | `https://backend.basedosdados.org` |
 
 ---
@@ -152,7 +170,7 @@ pip install -r requirements.txt
 
 ## Integração com clientes MCP
 
-As credenciais são lidas automaticamente de `~/.basedosdados/backend_credentials.json` — não é necessário passá-las como variáveis de ambiente.
+As credenciais são lidas automaticamente de `~/.basedosdados/credentials.json` — não é necessário passá-las como variáveis de ambiente.
 
 Substitua `/caminho/para/python` e `/caminho/para/mcp/server.py` pelos caminhos corretos na sua máquina.
 

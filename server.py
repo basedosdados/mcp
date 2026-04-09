@@ -9,14 +9,14 @@ Para consultas ao BigQuery, é necessário:
   2. Projeto de faturamento GCP (billing project), definido via:
        a. Parâmetro billing_project na ferramenta
        b. Variável de ambiente GCP_PROJECT_ID
-       c. Campo "gcp_project" em ~/.basedosdados/backend_credentials.json
+       c. Campo "gcp_project" em ~/.basedosdados/credentials.json
 
 ## Cadastro de dados (requer autenticação de backend)
 
 Credenciais em ordem de prioridade:
   1. Env var: BACKEND_TOKEN  (bdtoken_...)
   2. Env vars: EMAIL e PASSWORD  (legado)
-  3. ~/.basedosdados/backend_credentials.json:
+  3. ~/.basedosdados/credentials.json:
      {"dev": {"token": "bdtoken_..."}, "prod": {...}}          ← preferido
      {"dev": {"email": ..., "password": ...}, "prod": {...}}   ← legado
 
@@ -86,8 +86,8 @@ def _get_credentials(env: str) -> tuple:
     Lookup order:
       1. Env var BACKEND_TOKEN
       2. Env vars EMAIL + PASSWORD
-      3. ~/.basedosdados/backend_credentials.json, env key, "token" field
-      4. ~/.basedosdados/backend_credentials.json, env key, "email"+"password" fields
+      3. ~/.basedosdados/credentials.json, env key, "token" field
+      4. ~/.basedosdados/credentials.json, env key, "email"+"password" fields
     """
     backend_token = os.environ.get("BACKEND_TOKEN")
     if backend_token:
@@ -98,7 +98,7 @@ def _get_credentials(env: str) -> tuple:
     if email and password:
         return ("password", email, password)
 
-    creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
+    creds_path = Path.home() / ".basedosdados" / "credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
         env_data = data.get(env, data)  # fall back to flat structure
@@ -110,7 +110,7 @@ def _get_credentials(env: str) -> tuple:
     raise RuntimeError(
         f"No credentials found for env='{env}'. "
         "Set BACKEND_TOKEN env var, or EMAIL+PASSWORD, or create "
-        "~/.basedosdados/backend_credentials.json with "
+        "~/.basedosdados/credentials.json with "
         '{"dev": {"token": "bdtoken_..."}, "prod": {...}}'
     )
 
@@ -304,7 +304,7 @@ def auth(env: str = "dev") -> dict:
     Authenticate to the Data Basis backend.
 
     Reads credentials from EMAIL/PASSWORD env vars or
-    ~/.basedosdados/backend_credentials.json (keyed by env). Token is cached for 24 hours.
+    ~/.basedosdados/credentials.json (keyed by env). Token is cached for 24 hours.
 
     Args:
         env: "dev" or "prod" (default: "dev", overridden by ENV env var)
@@ -1660,7 +1660,7 @@ def _get_bq_client(billing_project: str | None = None):
 
     project = billing_project or os.environ.get("GCP_PROJECT_ID")
     if not project:
-        creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
+        creds_path = Path.home() / ".basedosdados" / "credentials.json"
         if creds_path.exists():
             data = json.loads(creds_path.read_text())
             project = data.get("gcp_project")
@@ -1668,7 +1668,7 @@ def _get_bq_client(billing_project: str | None = None):
         raise RuntimeError(
             "Projeto GCP de faturamento não encontrado. Forneça o parâmetro billing_project, "
             "defina a variável de ambiente GCP_PROJECT_ID, ou adicione 'gcp_project' em "
-            "~/.basedosdados/backend_credentials.json"
+            "~/.basedosdados/credentials.json"
         )
     return bigquery.Client(project=project)
 
@@ -1862,7 +1862,7 @@ PREFECT_URL = "https://prefect.basedosdados.org/api"
 
 
 def _prefect_key() -> str:
-    creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
+    creds_path = Path.home() / ".basedosdados" / "credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
         key = data.get("prod", {}).get("prefect")
@@ -1870,7 +1870,7 @@ def _prefect_key() -> str:
             return key
     raise RuntimeError(
         "No Prefect API key found. Add 'prefect' key under 'prod' in "
-        "~/.basedosdados/backend_credentials.json"
+        "~/.basedosdados/credentials.json"
     )
 
 
