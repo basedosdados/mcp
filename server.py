@@ -1,18 +1,30 @@
 """
 databasis-mcp: MCP server wrapping the Data Basis GraphQL backend.
 
-Credentials (in priority order):
+## Consumo de dados (sem autenticação de backend)
+
+Ferramentas de leitura de metadados e consulta ao BigQuery não requerem token de backend.
+Para consultas ao BigQuery, é necessário:
+  1. Conta GCP autenticada via ADC: gcloud auth application-default login
+  2. Projeto de faturamento GCP (billing project), definido via:
+       a. Parâmetro billing_project na ferramenta
+       b. Variável de ambiente GCP_PROJECT_ID
+       c. Campo "gcp_project" em ~/.basedosdados/credentials.json
+
+## Cadastro de dados (requer autenticação de backend)
+
+Credenciais em ordem de prioridade:
   1. Env var: BACKEND_TOKEN  (bdtoken_...)
-  2. Env vars: EMAIL and PASSWORD  (legacy)
-  3. ~/.basedosdados/backend_credentials.json:
-     {"dev": {"token": "bdtoken_..."}, "prod": {...}}          ← preferred
-     {"dev": {"email": ..., "password": ...}, "prod": {...}}   ← legacy
+  2. Env vars: EMAIL e PASSWORD  (legado)
+  3. ~/.basedosdados/credentials.json:
+     {"dev": {"token": "bdtoken_..."}, "prod": {...}}          ← preferido
+     {"dev": {"email": ..., "password": ...}, "prod": {...}}   ← legado
 
-Environment:
-  ENV=dev (default), ENV=local, or ENV=prod
+Ambiente:
+  ENV=dev (padrão), ENV=local, ou ENV=prod
 
-JWT tokens (password path) are cached in memory for 24 hours.
-Backend tokens are used directly with no caching.
+Tokens JWT (via senha) são cacheados em memória por 24 horas.
+Tokens de backend são usados diretamente sem cache.
 """
 
 import json
@@ -28,8 +40,11 @@ mcp = FastMCP(
     "databasis-mcp",
     instructions=(
         "Tools for interacting with the Data Basis backend API. "
-        "All write tools are idempotent: pass an existing id to update, "
-        "omit it to create. Always call auth first or rely on auto-auth."
+        "Read tools (search_datasets, list_datasets, get_dataset, lookup_id, etc.) "
+        "require no authentication. "
+        "BigQuery tools (query_bigquery, preview_table) require GCP ADC credentials and a billing project. "
+        "Write tools are idempotent: pass an existing id to update, omit it to create. "
+        "Write tools require backend credentials — call auth first or rely on auto-auth."
     ),
 )
 
@@ -71,8 +86,8 @@ def _get_credentials(env: str) -> tuple:
     Lookup order:
       1. Env var BACKEND_TOKEN
       2. Env vars EMAIL + PASSWORD
-      3. ~/.basedosdados/backend_credentials.json, env key, "token" field
-      4. ~/.basedosdados/backend_credentials.json, env key, "email"+"password" fields
+      3. ~/.basedosdados/credentials.json, env key, "token" field
+      4. ~/.basedosdados/credentials.json, env key, "email"+"password" fields
     """
     backend_token = os.environ.get("BACKEND_TOKEN")
     if backend_token:
@@ -83,7 +98,7 @@ def _get_credentials(env: str) -> tuple:
     if email and password:
         return ("password", email, password)
 
-    creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
+    creds_path = Path.home() / ".basedosdados" / "credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
         env_data = data.get(env, data)  # fall back to flat structure
@@ -95,7 +110,7 @@ def _get_credentials(env: str) -> tuple:
     raise RuntimeError(
         f"No credentials found for env='{env}'. "
         "Set BACKEND_TOKEN env var, or EMAIL+PASSWORD, or create "
-        "~/.basedosdados/backend_credentials.json with "
+        "~/.basedosdados/credentials.json with "
         '{"dev": {"token": "bdtoken_..."}, "prod": {...}}'
     )
 
@@ -147,12 +162,19 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _gql(query: str, variables: dict | None = None, env: str | None = None) -> dict:
-    auth_header, base_url = _get_token(env)
+def _gql(query: str, variables: dict | None = None, env: str | None = None, auth: bool = True) -> dict:
+    env = env or os.environ.get("ENV", "dev")
+    if env not in URLS:
+        raise ValueError(f"env must be 'local', 'dev', or 'prod', got: {env!r}")
+    base_url = URLS[env]
+    headers: dict[str, str] = {}
+    if auth:
+        auth_header, _ = _get_token(env)
+        headers["Authorization"] = auth_header
     r = requests.post(
         f"{base_url}/graphql",
         json={"query": query, "variables": variables or {}},
-        headers={"Authorization": auth_header},
+        headers=headers,
         timeout=60,
     )
     if not r.ok:
@@ -249,7 +271,7 @@ def _lookup_directory_column(directory_column_str: str, env: str) -> str | None:
     return None
 
 
-def _fetch_all(token_env: str, query_name: str, fields: str) -> list[dict]:
+def _fetch_all(token_env: str, query_name: str, fields: str, auth: bool = True) -> list[dict]:
     nodes: list[dict] = []
     cursor: str | None = None
     while True:
@@ -262,7 +284,7 @@ def _fetch_all(token_env: str, query_name: str, fields: str) -> list[dict]:
             }}
         }}
         """
-        data = _gql(q, env=token_env)
+        data = _gql(q, env=token_env, auth=auth)
         page = data[query_name]
         nodes.extend(e["node"] for e in page["edges"])
         if not page["pageInfo"]["hasNextPage"]:
@@ -282,7 +304,7 @@ def auth(env: str = "dev") -> dict:
     Authenticate to the Data Basis backend.
 
     Reads credentials from EMAIL/PASSWORD env vars or
-    ~/.basedosdados/backend_credentials.json (keyed by env). Token is cached for 24 hours.
+    ~/.basedosdados/credentials.json (keyed by env). Token is cached for 24 hours.
 
     Args:
         env: "dev" or "prod" (default: "dev", overridden by ENV env var)
@@ -337,13 +359,13 @@ def discover_ids(
     result: dict[str, dict] = {}
 
     if "status" in requested:
-        nodes = _fetch_all(env, "allStatus", "id slug")
+        nodes = _fetch_all(env, "allStatus", "id slug", auth=False)
         result["status"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "bigquery_type" in requested:
         for qname in ["allBigquerytype", "allBigQueryType"]:
             try:
-                nodes = _fetch_all(env, qname, "id name")
+                nodes = _fetch_all(env, qname, "id name", auth=False)
                 result["bigquery_type"] = {n["name"]: _strip_id(n["id"]) for n in nodes}
                 break
             except Exception:
@@ -352,39 +374,39 @@ def discover_ids(
             result["bigquery_type"] = {}
 
     if "entity" in requested:
-        nodes = _fetch_all(env, "allEntity", "id slug namePt")
+        nodes = _fetch_all(env, "allEntity", "id slug namePt", auth=False)
         result["entity"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "license" in requested:
-        nodes = _fetch_all(env, "allLicense", "id slug namePt")
+        nodes = _fetch_all(env, "allLicense", "id slug namePt", auth=False)
         result["license"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "availability" in requested:
-        nodes = _fetch_all(env, "allAvailability", "id slug namePt")
+        nodes = _fetch_all(env, "allAvailability", "id slug namePt", auth=False)
         result["availability"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "organization" in requested:
-        nodes = _fetch_all(env, "allOrganization", "id slug namePt")
+        nodes = _fetch_all(env, "allOrganization", "id slug namePt", auth=False)
         result["organization"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "theme" in requested:
-        nodes = _fetch_all(env, "allTheme", "id slug namePt")
+        nodes = _fetch_all(env, "allTheme", "id slug namePt", auth=False)
         result["theme"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "tag" in requested:
-        nodes = _fetch_all(env, "allTag", "id slug name")
+        nodes = _fetch_all(env, "allTag", "id slug name", auth=False)
         result["tag"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "entity_category" in requested:
-        nodes = _fetch_all(env, "allEntityCategory", "id slug name")
+        nodes = _fetch_all(env, "allEntityCategory", "id slug name", auth=False)
         result["entity_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "language" in requested:
-        nodes = _fetch_all(env, "allLanguage", "id slug name")
+        nodes = _fetch_all(env, "allLanguage", "id slug name", auth=False)
         result["language"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "measurement_unit_category" in requested:
-        nodes = _fetch_all(env, "allMeasurementUnitCategory", "id slug name")
+        nodes = _fetch_all(env, "allMeasurementUnitCategory", "id slug name", auth=False)
         result["measurement_unit_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "ids" not in _cache:
@@ -428,7 +450,7 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
         raise ValueError(f"Unknown category {category!r}. Valid: {list(_CATEGORY_QUERY_MAP)}")
     query_name, fields = _CATEGORY_QUERY_MAP[category]
     q = f'query($slug: String!) {{ {query_name}(slug: $slug, first: 1) {{ edges {{ node {{ {fields} }} }} }} }}'
-    data = _gql(q, {"slug": slug}, env=env)
+    data = _gql(q, {"slug": slug}, env=env, auth=False)
     edges = data[query_name]["edges"]
     if not edges:
         raise RuntimeError(f"{category} not found: {slug!r}")
@@ -464,7 +486,7 @@ def list_datasets(
             }
         }
         """
-        data = _gql(q, {"slug": organization_slug}, env=env)
+        data = _gql(q, {"slug": organization_slug}, env=env, auth=False)
     else:
         q = """
         {
@@ -474,7 +496,7 @@ def list_datasets(
             }
         }
         """
-        data = _gql(q, env=env)
+        data = _gql(q, env=env, auth=False)
 
     result = data["allDataset"]
     datasets = [
@@ -541,7 +563,7 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                                 observationLevels(first: 20) {
                                     edges { node { id entity { id slug } } }
                                 }
-                                cloudTables(first: 10) { edges { node { id } } }
+                                cloudTables(first: 10) { edges { node { id gcpProjectId gcpDatasetId gcpTableId } } }
                                 coverages(first: 10) {
                                     edges {
                                         node {
@@ -568,7 +590,7 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         }
     }
     """
-    data = _gql(q, {"slug": slug}, env=env)
+    data = _gql(q, {"slug": slug}, env=env, auth=False)
     edges = data["allDataset"]["edges"]
     if not edges:
         return {"found": False, "id": None, "slug": slug, "tables": {}}
@@ -592,7 +614,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                 for ol in t["observationLevels"]["edges"]
             ],
             "cloud_tables": [
-                {"id": _strip_id(ct["node"]["id"])}
+                {
+                    "id": _strip_id(ct["node"]["id"]),
+                    "gcp_project_id": ct["node"].get("gcpProjectId"),
+                    "gcp_dataset_id": ct["node"].get("gcpDatasetId"),
+                    "gcp_table_id": ct["node"].get("gcpTableId"),
+                }
                 for ct in t["cloudTables"]["edges"]
             ],
             "coverages": [
@@ -675,6 +702,7 @@ def reorder_tables(
         """,
         {"slug": dataset_slug},
         env=env,
+        auth=False,
     )
     edges = data["allDataset"]["edges"]
     if not edges:
@@ -766,6 +794,7 @@ def reorder_columns(
         """,
         {"id": table_id},
         env=env,
+        auth=False,
     )
     name_to_id = {
         edge["node"]["name"]: edge["node"]["_id"]
@@ -1416,6 +1445,7 @@ def get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
         """,
         {"slug": dataset_slug},
         env=env,
+        auth=False,
     )
     edges = data["allDataset"]["edges"]
     if not edges:
@@ -1620,6 +1650,211 @@ def get_authenticated_account(env: str = "dev") -> dict:
 
 
 # ---------------------------------------------------------------------------
+# BigQuery helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_bq_client(billing_project: str | None = None):
+    """Return a BigQuery client, resolving billing project from arg → env var → credentials file."""
+    from google.cloud import bigquery  # deferred import: only needed for BQ tools
+
+    project = billing_project or os.environ.get("GCP_PROJECT_ID")
+    if not project:
+        creds_path = Path.home() / ".basedosdados" / "credentials.json"
+        if creds_path.exists():
+            data = json.loads(creds_path.read_text())
+            project = data.get("gcp_project")
+    if not project:
+        raise RuntimeError(
+            "Projeto GCP de faturamento não encontrado. Forneça o parâmetro billing_project, "
+            "defina a variável de ambiente GCP_PROJECT_ID, ou adicione 'gcp_project' em "
+            "~/.basedosdados/credentials.json"
+        )
+    return bigquery.Client(project=project)
+
+
+def _bq_row_to_dict(row) -> dict:
+    """Convert a BigQuery Row to a JSON-serializable dict."""
+    from datetime import date, datetime
+    from decimal import Decimal
+
+    result = {}
+    for key, value in row.items():
+        if isinstance(value, (datetime, date)):
+            result[key] = value.isoformat()
+        elif isinstance(value, Decimal):
+            result[key] = float(value)
+        else:
+            result[key] = value
+    return result
+
+
+# ---------------------------------------------------------------------------
+# BigQuery tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def search_datasets(
+    query: str,
+    limit: int = 10,
+    env: str = "prod",
+) -> dict:
+    """
+    Busca datasets na Base dos Dados por nome (em português).
+
+    Não requer autenticação.
+
+    Args:
+        query: termo de busca (ex: "educação", "saúde", "clima")
+        limit: número máximo de resultados (padrão 10, máximo 50)
+        env: "dev" ou "prod" (padrão: "prod")
+
+    Returns:
+        {"total": int, "datasets": [{"slug", "name_pt", "description_pt", "organizations", "themes"}]}
+    """
+    limit = min(limit, 50)
+    q = """
+    query($search: String!, $limit: Int!) {
+        allDataset(namePt_Icontains: $search, first: $limit) {
+            totalCount
+            edges { node {
+                slug namePt descriptionPt
+                organizations(first: 5) { edges { node { slug namePt } } }
+                themes(first: 5) { edges { node { slug namePt } } }
+            } }
+        }
+    }
+    """
+    data = _gql(q, {"search": query, "limit": limit}, env=env, auth=False)
+    result = data["allDataset"]
+    datasets = [
+        {
+            "slug": e["node"]["slug"],
+            "name_pt": e["node"].get("namePt"),
+            "description_pt": e["node"].get("descriptionPt"),
+            "organizations": [o["node"]["slug"] for o in e["node"]["organizations"]["edges"]],
+            "themes": [t["node"]["slug"] for t in e["node"]["themes"]["edges"]],
+        }
+        for e in result["edges"]
+    ]
+    return {"total": result["totalCount"], "datasets": datasets}
+
+
+@mcp.tool()
+def preview_table(
+    dataset_slug: str,
+    table_slug: str,
+    billing_project: str | None = None,
+    limit: int = 10,
+) -> dict:
+    """
+    Visualiza as primeiras linhas de uma tabela da Base dos Dados via BigQuery.
+
+    Resolve automaticamente a referência BigQuery a partir dos metadados do backend.
+    Não requer autenticação de backend, mas requer GCP autenticado via ADC:
+      gcloud auth application-default login
+
+    Args:
+        dataset_slug: slug do dataset (ex: "br_ibge_censo_demografico")
+        table_slug: slug da tabela (ex: "municipio")
+        billing_project: projeto GCP para faturamento (opcional se GCP_PROJECT_ID definido)
+        limit: número máximo de linhas (padrão 10, máximo 100)
+
+    Returns:
+        {"bq_table": str, "rows": list[dict], "row_count": int}
+    """
+    limit = min(limit, 100)
+
+    q = """
+    query($slug: String!) {
+        allDataset(slug: $slug) {
+            edges { node {
+                tables(first: 200) { edges { node {
+                    slug
+                    cloudTables(first: 1) { edges { node {
+                        gcpProjectId gcpDatasetId gcpTableId
+                    } } }
+                } } }
+            } }
+        }
+    }
+    """
+    data = _gql(q, {"slug": dataset_slug}, auth=False)
+    ds_edges = data["allDataset"]["edges"]
+    if not ds_edges:
+        raise RuntimeError(f"Dataset não encontrado: {dataset_slug!r}")
+
+    table_node = None
+    for te in ds_edges[0]["node"]["tables"]["edges"]:
+        if te["node"]["slug"] == table_slug:
+            table_node = te["node"]
+            break
+    if table_node is None:
+        raise RuntimeError(f"Tabela {table_slug!r} não encontrada no dataset {dataset_slug!r}")
+
+    ct_edges = table_node["cloudTables"]["edges"]
+    if not ct_edges:
+        raise RuntimeError(f"Tabela {table_slug!r} não possui referência BigQuery registrada")
+
+    ct = ct_edges[0]["node"]
+    bq_table = f"{ct['gcpProjectId']}.{ct['gcpDatasetId']}.{ct['gcpTableId']}"
+
+    client = _get_bq_client(billing_project)
+    sql = f"SELECT * FROM `{bq_table}` LIMIT {limit}"
+    rows = list(client.query(sql).result())
+
+    return {
+        "bq_table": bq_table,
+        "rows": [_bq_row_to_dict(row) for row in rows],
+        "row_count": len(rows),
+    }
+
+
+@mcp.tool()
+def query_bigquery(
+    sql: str,
+    billing_project: str | None = None,
+) -> dict:
+    """
+    Executa uma consulta SQL em tabelas da Base dos Dados no BigQuery.
+
+    As tabelas da BD estão no projeto `basedosdados`, no formato:
+      `basedosdados.<gcp_dataset_id>.<gcp_table_id>`
+
+    Use get_dataset() para obter os valores corretos de gcp_dataset_id e gcp_table_id
+    (campo cloud_tables na resposta).
+
+    Não requer autenticação de backend, mas requer GCP autenticado via ADC:
+      gcloud auth application-default login
+
+    Sempre inclua LIMIT na consulta para evitar leituras desnecessárias.
+
+    Args:
+        sql: consulta SQL referenciando tabelas em `basedosdados.*`
+        billing_project: projeto GCP para faturamento (opcional se GCP_PROJECT_ID definido)
+
+    Returns:
+        {"rows": list[dict], "row_count": int, "bytes_processed": int | None}
+    """
+    if "basedosdados" not in sql.lower():
+        raise ValueError(
+            "A consulta deve referenciar tabelas do projeto `basedosdados`. "
+            "Exemplo: SELECT * FROM `basedosdados.br_ibge_censo_demografico.municipio` LIMIT 10"
+        )
+
+    client = _get_bq_client(billing_project)
+    job = client.query(sql)
+    rows = list(job.result())
+
+    return {
+        "rows": [_bq_row_to_dict(row) for row in rows],
+        "row_count": len(rows),
+        "bytes_processed": job.total_bytes_processed,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Prefect helpers
 # ---------------------------------------------------------------------------
 
@@ -1627,7 +1862,7 @@ PREFECT_URL = "https://prefect.basedosdados.org/api"
 
 
 def _prefect_key() -> str:
-    creds_path = Path.home() / ".basedosdados" / "backend_credentials.json"
+    creds_path = Path.home() / ".basedosdados" / "credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
         key = data.get("prod", {}).get("prefect")
@@ -1635,7 +1870,7 @@ def _prefect_key() -> str:
             return key
     raise RuntimeError(
         "No Prefect API key found. Add 'prefect' key under 'prod' in "
-        "~/.basedosdados/backend_credentials.json"
+        "~/.basedosdados/credentials.json"
     )
 
 
