@@ -55,6 +55,7 @@ mcp = FastMCP(
 URLS = {
     "local": "http://localhost:8080",
     "dev": "https://development.backend.basedosdados.org",
+    "staging": "https://staging.backend.basedosdados.org",
     "prod": "https://backend.basedosdados.org",
 }
 
@@ -123,7 +124,7 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
     """
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
-        raise ValueError(f"env must be 'local', 'dev', or 'prod', got: {env!r}")
+        raise ValueError(f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}")
 
     base_url = URLS[env]
     creds = _get_credentials(env)
@@ -165,7 +166,7 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
 def _gql(query: str, variables: dict | None = None, env: str | None = None, auth: bool = True) -> dict:
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
-        raise ValueError(f"env must be 'local', 'dev', or 'prod', got: {env!r}")
+        raise ValueError(f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}")
     base_url = URLS[env]
     headers: dict[str, str] = {}
     if auth:
@@ -580,8 +581,7 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                                 updates(first: 10) {
                                     edges { node { id entity { id slug } } }
                                 }
-                                publishedBy(first: 10) { edges { node { id email } } }
-                                dataCleanedBy(first: 10) { edges { node { id email } } }
+                                __GATED_FIELDS__
                             }
                         }
                     }
@@ -590,7 +590,15 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         }
     }
     """
-    data = _gql(q, {"slug": slug}, env=env, auth=False)
+    # publishedBy/dataCleanedBy require an authenticated request on some
+    # backends (staging/prod). Query them only when credentials work;
+    # otherwise fall back to the public query without those fields.
+    gated = """publishedBy(first: 10) { edges { node { id email } } }
+                                dataCleanedBy(first: 10) { edges { node { id email } } }"""
+    try:
+        data = _gql(q.replace("__GATED_FIELDS__", gated), {"slug": slug}, env=env)
+    except (RuntimeError, requests.RequestException):
+        data = _gql(q.replace("__GATED_FIELDS__", ""), {"slug": slug}, env=env, auth=False)
     edges = data["allDataset"]["edges"]
     if not edges:
         return {"found": False, "id": None, "slug": slug, "tables": {}}
@@ -608,8 +616,8 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "observation_levels": [
                 {
                     "id": _strip_id(ol["node"]["id"]),
-                    "entity_id": _strip_id(ol["node"]["entity"]["id"]),
-                    "entity_slug": ol["node"]["entity"]["slug"],
+                    "entity_id": _strip_id(ol["node"]["entity"]["id"]) if ol["node"].get("entity") else None,
+                    "entity_slug": ol["node"]["entity"]["slug"] if ol["node"].get("entity") else None,
                 }
                 for ol in t["observationLevels"]["edges"]
             ],
@@ -625,8 +633,8 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "coverages": [
                 {
                     "id": _strip_id(cov["node"]["id"]),
-                    "area_id": _strip_id(cov["node"]["area"]["id"]),
-                    "area_slug": cov["node"]["area"]["slug"],
+                    "area_id": _strip_id(cov["node"]["area"]["id"]) if cov["node"].get("area") else None,
+                    "area_slug": cov["node"]["area"]["slug"] if cov["node"].get("area") else None,
                     "datetime_ranges": [
                         {
                             "id": _strip_id(dtr["node"]["id"]),
@@ -642,18 +650,18 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "updates": [
                 {
                     "id": _strip_id(upd["node"]["id"]),
-                    "entity_id": _strip_id(upd["node"]["entity"]["id"]),
-                    "entity_slug": upd["node"]["entity"]["slug"],
+                    "entity_id": _strip_id(upd["node"]["entity"]["id"]) if upd["node"].get("entity") else None,
+                    "entity_slug": upd["node"]["entity"]["slug"] if upd["node"].get("entity") else None,
                 }
                 for upd in t["updates"]["edges"]
             ],
             "published_by": [
                 {"id": _strip_id(u["node"]["id"]), "email": u["node"]["email"]}
-                for u in t["publishedBy"]["edges"]
+                for u in t.get("publishedBy", {"edges": []})["edges"]
             ],
             "data_cleaned_by": [
                 {"id": _strip_id(u["node"]["id"]), "email": u["node"]["email"]}
-                for u in t["dataCleanedBy"]["edges"]
+                for u in t.get("dataCleanedBy", {"edges": []})["edges"]
             ],
         }
 
@@ -1636,7 +1644,18 @@ def get_authenticated_account(env: str = "dev") -> dict:
 
     Returns: {"id": str, "email": str}
     """
-    email, _ = _get_credentials(env)
+    creds = _get_credentials(env)
+    if creds[0] == "password":
+        email = creds[1]
+    else:
+        creds_path = Path.home() / ".basedosdados" / "credentials.json"
+        env_data = json.loads(creds_path.read_text()).get(env, {}) if creds_path.exists() else {}
+        email = os.environ.get("EMAIL") or env_data.get("email")
+        if not email:
+            raise RuntimeError(
+                f"Token-based credentials for env='{env}' carry no email. "
+                'Add an "email" field next to the token in ~/.basedosdados/credentials.json.'
+            )
     data = _gql(
         'query($email: String!) { allAccount(first: 1, email: $email) { edges { node { id email } } } }',
         {"email": email},
