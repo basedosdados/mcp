@@ -794,7 +794,7 @@ def reorder_columns(
     """
     ds_data = _gql(
         """
-        query($id: UUID!) {
+        query($id: ID!) {
             allColumn(table_Id: $id) {
                 edges { node { _id name } }
             }
@@ -1026,11 +1026,31 @@ def upload_columns_from_sheet(
     bq_type_ids: dict[str, str] = ids.get("bigquery_type", {})
     published_status_id: str = ids.get("status", {}).get("published", "")
 
+    # Pre-fetch existing columns so re-runs are idempotent: CreateUpdateColumn
+    # has no id here and would otherwise create a DUPLICATE for every existing
+    # name. Skip names that already exist (this tool is additive — update
+    # existing columns via update_column instead).
+    existing_names: set[str] = set()
+    try:
+        ec = _gql(
+            "query($id: ID!) { allColumn(table_Id: $id) { edges { node { name } } } }",
+            {"id": table_id},
+            env=env,
+            auth=False,
+        )
+        existing_names = {e["node"]["name"] for e in ec["allColumn"]["edges"]}
+    except Exception:
+        existing_names = set()
+
     # Build one input dict per row
     column_inputs = []
+    skipped = []
     for row in rows:
         name = row.get("name", "").strip()
         if not name:
+            continue
+        if name in existing_names:
+            skipped.append(name)
             continue
 
         bq_type_name = row.get("bigquery_type", "STRING").strip()
@@ -1071,7 +1091,7 @@ def upload_columns_from_sheet(
         column_inputs.append(fields)
 
     if not column_inputs:
-        return {"created": 0, "columns": [], "errors": []}
+        return {"created": 0, "columns": [], "errors": [], "skipped": skipped}
 
     # Batch all columns into a single GraphQL mutation request using aliases
     auth_header, base_url = _get_token(env)
@@ -1101,17 +1121,47 @@ def upload_columns_from_sheet(
     if gql_errors:
         raise RuntimeError(json.dumps(gql_errors, indent=2))
 
+    retry_inputs = []
     for i, inp in enumerate(column_inputs):
         name = inp["name"]
         payload = data.get("data", {}).get(f"col{i}", {})
         if payload.get("errors"):
-            errors.append({"name": name, "error": payload["errors"]})
+            # A directoryPrimaryKey the backend rejects (e.g. the target isn't a
+            # recognized directory, or this is a directory dataset's own column)
+            # fails the WHOLE column. Retry once without the FK so the column is
+            # still created — matching the "silently skip the FK" contract.
+            if "directoryPrimaryKey" in inp:
+                retry_inputs.append({k: v for k, v in inp.items() if k != "directoryPrimaryKey"})
+            else:
+                errors.append({"name": name, "error": payload["errors"]})
         elif payload.get("column"):
             created.append({"name": name, "id": _strip_id(payload["column"]["id"])})
         else:
             errors.append({"name": name, "error": "no column returned"})
 
-    return {"created": len(created), "columns": created, "errors": errors}
+    for inp in retry_inputs:
+        try:
+            rr = _gql(
+                "mutation($i: CreateUpdateColumnInput!) { CreateUpdateColumn(input: $i) "
+                "{ errors { field messages } column { id name } } }",
+                {"i": inp},
+                env=env,
+            )
+            pay = rr.get("CreateUpdateColumn", {}) or {}
+            if pay.get("errors"):
+                errors.append({"name": inp["name"], "error": pay["errors"]})
+            elif pay.get("column"):
+                created.append({
+                    "name": inp["name"],
+                    "id": _strip_id(pay["column"]["id"]),
+                    "note": "created without directoryPrimaryKey (FK rejected)",
+                })
+            else:
+                errors.append({"name": inp["name"], "error": "no column returned on retry"})
+        except Exception as e:
+            errors.append({"name": inp["name"], "error": f"retry without directoryPrimaryKey failed: {e}"})
+
+    return {"created": len(created), "columns": created, "errors": errors, "skipped": skipped}
 
 
 @mcp.tool()
