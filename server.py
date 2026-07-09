@@ -1074,7 +1074,7 @@ def upload_columns_from_sheet(
         return {"created": 0, "columns": [], "errors": []}
 
     # Batch all columns into a single GraphQL mutation request using aliases
-    token, base_url = _get_token(env)
+    auth_header, base_url = _get_token(env)
     variables = {f"input{i}": inp for i, inp in enumerate(column_inputs)}
     aliases = "\n".join(
         f'  col{i}: CreateUpdateColumn(input: $input{i}) {{ errors {{ field messages }} column {{ id name }} }}'
@@ -1088,7 +1088,7 @@ def upload_columns_from_sheet(
     r = requests.post(
         f"{base_url}/graphql",
         json={"query": query, "variables": variables},
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": auth_header},
         timeout=120,
     )
     if not r.ok:
