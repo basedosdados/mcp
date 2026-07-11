@@ -1687,6 +1687,240 @@ def create_update_organization(
     return {"id": _strip_id(o["id"]), "slug": o["slug"]}
 
 
+def _create_update_ref(
+    mutation_name: str,
+    result_field: str,
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    extra: dict | None = None,
+    env: str = "dev",
+) -> dict:
+    """Shared create/update helper for simple reference tables that carry
+    slug + name (pt/en/es). `extra` adds model-specific fields (only truthy
+    values are sent). `result_field` is the camelCase model field on the
+    mutation payload (e.g. "license", "entityCategory")."""
+    fields: dict[str, Any] = {
+        "slug": slug,
+        "name": name_pt,
+        "namePt": name_pt,
+        "nameEn": name_en,
+        "nameEs": name_es,
+    }
+    if extra:
+        fields.update({k: v for k, v in extra.items() if v not in (None, "")})
+    if id:
+        fields["id"] = id
+    payload = _mut(mutation_name, fields, f"{result_field} {{ id slug }}", env=env)
+    o = payload[result_field]
+    return {"id": _strip_id(o["id"]), "slug": o["slug"]}
+
+
+@mcp.tool()
+def create_update_license(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    url: str = "",
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a license record (e.g. cc_by_sa, cc_by_nc_sa, cc0).
+
+    Pass id to update an existing record; omit to create new.
+
+    Args:
+        slug: license slug, e.g. "cc_by_sa"
+        name_pt/en/es: display name in each language, e.g.
+            "Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0)"
+        url: canonical license URL, e.g.
+            "https://creativecommons.org/licenses/by-sa/4.0/"
+        id: pass to update an existing record
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateLicense", "license", slug, name_pt, name_en, name_es,
+        id=id, extra={"url": url}, env=env,
+    )
+
+
+@mcp.tool()
+def create_update_availability(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update an availability record (e.g. online, physical, in_person).
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateAvailability", "availability", slug, name_pt, name_en, name_es,
+        id=id, env=env,
+    )
+
+
+@mcp.tool()
+def create_update_language(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a language record (e.g. en, pt, es).
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateLanguage", "language", slug, name_pt, name_en, name_es,
+        id=id, env=env,
+    )
+
+
+@mcp.tool()
+def create_update_status(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a status record (e.g. published, under_review, processing).
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateStatus", "status", slug, name_pt, name_en, name_es,
+        id=id, env=env,
+    )
+
+
+@mcp.tool()
+def create_update_entity_category(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update an entity-category record (groups observation-level
+    entities, e.g. "datetime", "spatial", "person").
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateEntityCategory", "entitycategory", slug, name_pt, name_en, name_es,
+        id=id, env=env,
+    )
+
+
+@mcp.tool()
+def create_update_entity(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    category_id: str | None = None,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update an observation-level entity record (e.g. person, country,
+    year, municipality).
+
+    Pass id to update an existing record; omit to create new.
+
+    Args:
+        category_id: bare EntityCategory ID this entity belongs to (optional).
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateEntity", "entity", slug, name_pt, name_en, name_es,
+        id=id, extra={"category": category_id}, env=env,
+    )
+
+
+@mcp.tool()
+def create_update_measurement_unit_category(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a measurement-unit-category record (groups measurement
+    units, e.g. "currency", "length", "time").
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateMeasurementUnitCategory", "measurementunitcategory",
+        slug, name_pt, name_en, name_es, id=id, env=env,
+    )
+
+
+@mcp.tool()
+def create_update_area(
+    slug: str,
+    name_pt: str,
+    name_en: str,
+    name_es: str,
+    administrative_level: str = "",
+    entity_id: str | None = None,
+    parent_id: str | None = None,
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a spatial-coverage area record (e.g. "world", "eu", "br",
+    a continent or country).
+
+    Pass id to update an existing record; omit to create new.
+
+    Args:
+        administrative_level: optional administrative level string.
+        entity_id: bare Entity ID for the area's spatial entity (optional).
+        parent_id: bare parent Area ID (optional).
+
+    Returns: {"id": str, "slug": str}
+    """
+    return _create_update_ref(
+        "CreateUpdateArea", "area", slug, name_pt, name_en, name_es, id=id,
+        extra={"administrativeLevel": administrative_level, "entity": entity_id,
+               "parent": parent_id},
+        env=env,
+    )
+
+
 @mcp.tool()
 def get_authenticated_account(env: str = "dev") -> dict:
     """

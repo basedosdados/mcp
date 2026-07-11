@@ -109,6 +109,14 @@ Permite criar e atualizar metadados de conjuntos, tabelas, colunas e demais enti
 | `create_update_tag` | Cria ou atualiza tag |
 | `create_update_theme` | Cria ou atualiza tema |
 | `create_update_organization` | Cria ou atualiza organização |
+| `create_update_license` | Cria ou atualiza licença (ex.: `cc_by_sa`, `cc0`) |
+| `create_update_availability` | Cria ou atualiza disponibilidade |
+| `create_update_language` | Cria ou atualiza idioma |
+| `create_update_status` | Cria ou atualiza status |
+| `create_update_entity` | Cria ou atualiza entidade (nível de observação) |
+| `create_update_entity_category` | Cria ou atualiza categoria de entidade |
+| `create_update_measurement_unit_category` | Cria ou atualiza categoria de unidade de medida |
+| `create_update_area` | Cria ou atualiza área de cobertura espacial |
 | `reorder_tables` | Define a ordem de exibição das tabelas em um conjunto |
 | `reorder_observation_levels` | Define a ordem de exibição dos níveis de observação |
 | `reorder_columns` | Define a ordem de exibição das colunas |
