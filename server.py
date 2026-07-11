@@ -895,11 +895,19 @@ def create_update_table(
     description_en: str = "",
     description_es: str = "",
     raw_data_source_ids: list[str] | None = None,
+    is_directory: bool = False,
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
     """
     Create or update a table record.
+
+    Args:
+        is_directory: set True for a directory table (a table whose primary-key
+            column other datasets reference via directory_column). Required for
+            the table's columns to be selectable as a directory_primary_key
+            target. Only sent when True, so it never accidentally clears the
+            flag on a normal update.
 
     Returns: {"id": str, "slug": str}
     """
@@ -922,6 +930,8 @@ def create_update_table(
         fields["descriptionEs"] = description_es
     if raw_data_source_ids:
         fields["rawDataSource"] = raw_data_source_ids
+    if is_directory:
+        fields["isDirectory"] = is_directory
     if id:
         fields["id"] = id
 
@@ -1225,7 +1235,14 @@ def update_column(
         fields["containsSensitiveData"] = has_sensitive_data
     if covered_by_dictionary:
         fields["coveredByDictionary"] = covered_by_dictionary
-    # directoryColumn / temporalCoverage are not valid on CreateUpdateColumnInput — omitted
+    # Resolve the BD directories FK (e.g. "br_bd_diretorios_us.state:id_state")
+    # to the target column node id and set it. The backend only accepts a target
+    # whose column is is_primary_key=True and whose table is is_directory=True
+    # (limit_choices_to); if the lookup misses, the FK is silently skipped.
+    if directory_column_name:
+        directory_pk_id = _lookup_directory_column(directory_column_name, env)
+        if directory_pk_id:
+            fields["directoryPrimaryKey"] = directory_pk_id
 
     payload = _mut("CreateUpdateColumn", fields, "column { id name }", env=env)
     col = payload["column"]
