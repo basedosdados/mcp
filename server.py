@@ -895,11 +895,19 @@ def create_update_table(
     description_en: str = "",
     description_es: str = "",
     raw_data_source_ids: list[str] | None = None,
+    is_directory: bool = False,
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
     """
     Create or update a table record.
+
+    Args:
+        is_directory: set True for a directory table (a table whose primary-key
+            column other datasets reference via directory_column). Required for
+            the table's columns to be selectable as a directory_primary_key
+            target. Only sent when True, so it never accidentally clears the
+            flag on a normal update.
 
     Returns: {"id": str, "slug": str}
     """
@@ -922,6 +930,8 @@ def create_update_table(
         fields["descriptionEs"] = description_es
     if raw_data_source_ids:
         fields["rawDataSource"] = raw_data_source_ids
+    if is_directory:
+        fields["isDirectory"] = is_directory
     if id:
         fields["id"] = id
 
@@ -1164,6 +1174,284 @@ def upload_columns_from_sheet(
     return {"created": len(created), "columns": created, "errors": errors, "skipped": skipped}
 
 
+def _fetch_table_columns(table_id: str, env: str) -> list[dict]:
+    """
+    All columns ({id, name}) for a table, via the top-level allColumn query.
+
+    Unlike the nested tables{columns(first: 200)} path used by get_dataset —
+    which caps at 200 columns — allColumn(table_Id:) returns every column, so
+    this is safe for wide tables (400+ columns).
+    """
+    data = _gql(
+        "query($id: ID!) { allColumn(table_Id: $id) { edges { node { id name } } } }",
+        {"id": table_id},
+        env=env,
+        auth=False,
+    )
+    return [e["node"] for e in data["allColumn"]["edges"]]
+
+
+@mcp.tool()
+def bulk_upsert_columns(
+    table_id: str,
+    architecture_url: str = "",
+    columns_json: str = "",
+    env: str = "dev",
+    update_only: bool = False,
+    dry_run: bool = False,
+    batch_size: int = 50,
+) -> dict:
+    """
+    Bulk create-or-update many columns on a table in one call, matched by NAME.
+
+    This is the bulk counterpart to update_column. The server resolves each
+    column's id by name internally, so NO column UUID is ever passed by the
+    caller — eliminating the id-transcription errors that make per-column
+    updates unreliable at scale — and tables with more than 200 columns work
+    (ids are read with the uncapped allColumn query, not get_dataset's 200-cap).
+
+    Provide EXACTLY ONE source:
+      - architecture_url: a public Google Sheet (same format as
+        upload_columns_from_sheet) plus OPTIONAL `description_pt`,
+        `description_en`, `description_es` columns. A bare `description` column
+        is used as Portuguese when `description_pt` is absent.
+      - columns_json: a JSON list of column dicts, e.g.
+        '[{"name": "age", "description_pt": "Idade", "description_en": "Age",
+           "description_es": "Edad", "covered_by_dictionary": true,
+           "directory_column": "br_bd_diretorios_mundo.pais:sigla_iso3",
+           "measurement_unit": "year", "has_sensitive_data": false,
+           "bigquery_type": "INT64"}]'
+
+    Only fields present (non-empty) for a row are written; omitted fields are
+    left untouched — no accidental blanking, and partition/primary-key flags are
+    never clobbered. Rows whose name already exists are UPDATED; new names are
+    CREATED unless update_only=True (then reported under skipped_not_on_table).
+    Idempotent: safe to re-run.
+
+    Args:
+        table_id: bare table ID
+        architecture_url: Google Sheet URL (mutually exclusive with columns_json)
+        columns_json: JSON list of column dicts (mutually exclusive with architecture_url)
+        env: "local" | "dev" | "staging" | "prod"
+        update_only: when True, do not create columns for names absent from the table
+        dry_run: when True, return the planned actions without writing anything
+        batch_size: columns per GraphQL request (aliased batch), 1-100
+
+    Returns (compact — never dumps every column):
+      {"updated": int, "created": int, "skipped_not_on_table": [str],
+       "unchanged_no_fields": [str], "errors": [{"name", "error"}],
+       "source_rows": int, "table_columns": int, "dry_run": bool,
+       "planned_writes": int, "plan": [...]  (last two only when dry_run)}
+    """
+    import csv
+    import io
+    import re
+
+    if bool(architecture_url.strip()) == bool(columns_json.strip()):
+        raise ValueError("Provide exactly one of architecture_url or columns_json.")
+
+    # --- load source rows -------------------------------------------------
+    if architecture_url.strip():
+        match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", architecture_url)
+        if not match:
+            raise ValueError(f"Cannot extract sheet ID from URL: {architecture_url}")
+        csv_url = f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv"
+        resp = requests.get(csv_url, timeout=30, allow_redirects=True)
+        if not resp.ok:
+            raise RuntimeError(f"Failed to download sheet CSV: HTTP {resp.status_code}")
+        rows: list[dict] = list(csv.DictReader(io.StringIO(resp.content.decode("utf-8"))))
+    else:
+        rows = json.loads(columns_json)
+        if not isinstance(rows, list):
+            raise ValueError("columns_json must be a JSON list of column dicts.")
+
+    def _get(row: dict, *keys: str) -> str:
+        for k in keys:
+            v = row.get(k)
+            if v is None:
+                continue
+            v = str(v).strip()
+            if v:
+                return v
+        return ""
+
+    def _truthy(row: dict, key: str) -> bool | None:
+        v = row.get(key)
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, bool):
+            return v
+        return str(v).strip().lower() in ("yes", "true", "1")
+
+    # --- resolve existing columns by name (uncapped) ----------------------
+    existing = _fetch_table_columns(table_id, env)
+    name_to_id = {c["name"]: _strip_id(c["id"]) for c in existing}
+
+    named_rows = [r for r in rows if _get(r, "name")]
+    creates_needed = not update_only and any(
+        _get(r, "name") not in name_to_id for r in named_rows
+    )
+    bq_type_ids: dict[str, str] = {}
+    published_status_id = ""
+    if creates_needed:
+        ids = discover_ids(env=env, keys=["bigquery_type", "status"])
+        bq_type_ids = ids.get("bigquery_type", {})
+        published_status_id = ids.get("status", {}).get("published", "")
+
+    # --- build one CreateUpdateColumn input per row -----------------------
+    inputs: list[dict] = []
+    actions: list[dict] = []
+    skipped_not_on_table: list[str] = []
+    unchanged: list[str] = []
+
+    for row in named_rows:
+        name = _get(row, "name")
+        col_id = name_to_id.get(name)
+        is_update = col_id is not None
+        if not is_update and update_only:
+            skipped_not_on_table.append(name)
+            continue
+
+        fields: dict[str, Any] = {"name": name, "table": table_id}
+        if is_update:
+            fields["id"] = col_id
+        set_fields: list[str] = []
+
+        pt = _get(row, "description_pt", "description")
+        if pt:
+            fields["descriptionPt"] = pt
+            set_fields.append("descriptionPt")
+        en = _get(row, "description_en")
+        if en:
+            fields["descriptionEn"] = en
+            set_fields.append("descriptionEn")
+        es = _get(row, "description_es")
+        if es:
+            fields["descriptionEs"] = es
+            set_fields.append("descriptionEs")
+
+        cbd = _truthy(row, "covered_by_dictionary")
+        if cbd is not None:
+            fields["coveredByDictionary"] = cbd
+            set_fields.append("coveredByDictionary")
+
+        mu = _get(row, "measurement_unit")
+        if mu:
+            fields["measurementUnit"] = mu
+            set_fields.append("measurementUnit")
+
+        hsd = _truthy(row, "has_sensitive_data")
+        if hsd is not None:
+            fields["containsSensitiveData"] = hsd
+            set_fields.append("containsSensitiveData")
+
+        dir_col = _get(row, "directory_column")
+        if dir_col:
+            fk = _lookup_directory_column(dir_col, env)
+            if fk:
+                fields["directoryPrimaryKey"] = fk
+                set_fields.append("directoryPrimaryKey")
+
+        if not is_update:
+            bq_type_name = _get(row, "bigquery_type") or "STRING"
+            if bq_type_ids.get(bq_type_name):
+                fields["bigqueryType"] = bq_type_ids[bq_type_name]
+            if published_status_id:
+                fields["status"] = published_status_id
+
+        # An existing column with no fields to set would be pure churn — skip it.
+        if is_update and not set_fields:
+            unchanged.append(name)
+            continue
+
+        inputs.append(fields)
+        actions.append(
+            {"name": name, "action": "update" if is_update else "create", "sets": set_fields}
+        )
+
+    result: dict[str, Any] = {
+        "source_rows": len(named_rows),
+        "table_columns": len(existing),
+        "updated": 0,
+        "created": 0,
+        "skipped_not_on_table": skipped_not_on_table,
+        "unchanged_no_fields": unchanged,
+        "errors": [],
+        "dry_run": dry_run,
+    }
+
+    if dry_run:
+        result["planned_writes"] = len(inputs)
+        result["plan"] = actions[:200]
+        return result
+
+    if not inputs:
+        return result
+
+    # --- execute in aliased batches (per-alias errors are isolated) -------
+    auth_header, base_url = _get_token(env)
+    updated = 0
+    created = 0
+    errors: list[dict] = []
+
+    def _run_batch(batch: list[dict]) -> None:
+        nonlocal updated, created
+        variables = {f"input{i}": inp for i, inp in enumerate(batch)}
+        aliases = "\n".join(
+            f"  col{i}: CreateUpdateColumn(input: $input{i}) "
+            f"{{ errors {{ field messages }} column {{ id name }} }}"
+            for i in range(len(batch))
+        )
+        var_defs = ", ".join(f"$input{i}: CreateUpdateColumnInput!" for i in range(len(batch)))
+        query = f"mutation({var_defs}) {{\n{aliases}\n}}"
+        r = requests.post(
+            f"{base_url}/graphql",
+            json={"query": query, "variables": variables},
+            headers={"Authorization": auth_header},
+            timeout=120,
+        )
+        if not r.ok:
+            raise RuntimeError(f"HTTP {r.status_code}:\n{r.text}")
+        data = r.json()
+        if data.get("errors"):
+            raise RuntimeError(json.dumps(data["errors"], indent=2))
+        for i, inp in enumerate(batch):
+            payload = data.get("data", {}).get(f"col{i}", {}) or {}
+            if payload.get("errors"):
+                # A rejected directoryPrimaryKey fails the whole column; retry
+                # once without the FK (mirrors upload_columns_from_sheet).
+                if "directoryPrimaryKey" in inp:
+                    retry = {k: v for k, v in inp.items() if k != "directoryPrimaryKey"}
+                    try:
+                        rr = _mut("CreateUpdateColumn", retry, "column { id name }", env=env)
+                        if rr.get("column"):
+                            if "id" in inp:
+                                updated += 1
+                            else:
+                                created += 1
+                            continue
+                    except Exception as e:
+                        errors.append({"name": inp["name"], "error": f"retry w/o FK failed: {e}"})
+                        continue
+                errors.append({"name": inp["name"], "error": payload["errors"]})
+            elif payload.get("column"):
+                if "id" in inp:
+                    updated += 1
+                else:
+                    created += 1
+            else:
+                errors.append({"name": inp["name"], "error": "no column returned"})
+
+    bs = max(1, min(int(batch_size), 100))
+    for start in range(0, len(inputs), bs):
+        _run_batch(inputs[start:start + bs])
+
+    result["updated"] = updated
+    result["created"] = created
+    result["errors"] = errors
+    return result
+
+
 @mcp.tool()
 def update_column(
     column_id: str,
@@ -1225,7 +1513,14 @@ def update_column(
         fields["containsSensitiveData"] = has_sensitive_data
     if covered_by_dictionary:
         fields["coveredByDictionary"] = covered_by_dictionary
-    # directoryColumn / temporalCoverage are not valid on CreateUpdateColumnInput — omitted
+    # Resolve the BD directories FK (e.g. "br_bd_diretorios_us.state:id_state")
+    # to the target column node id and set it. The backend only accepts a target
+    # whose column is is_primary_key=True and whose table is is_directory=True
+    # (limit_choices_to); if the lookup misses, the FK is silently skipped.
+    if directory_column_name:
+        directory_pk_id = _lookup_directory_column(directory_column_name, env)
+        if directory_pk_id:
+            fields["directoryPrimaryKey"] = directory_pk_id
 
     payload = _mut("CreateUpdateColumn", fields, "column { id name }", env=env)
     col = payload["column"]
