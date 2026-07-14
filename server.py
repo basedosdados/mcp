@@ -479,15 +479,22 @@ def list_datasets(
         {"total": int, "datasets": [{"id": str, "slug": str, "name_pt": str, "description": str}]}
     """
     if organization_slug:
+        # allDataset supports organizations_Id, not organizations_Slug, so
+        # resolve the org slug to its id first.
+        org_q = "query($slug: String!) { allOrganization(slug: $slug, first: 1) { edges { node { id } } } }"
+        org_edges = _gql(org_q, {"slug": organization_slug}, env=env, auth=False)["allOrganization"]["edges"]
+        if not org_edges:
+            return {"total": 0, "datasets": []}
+        org_id = _strip_id(org_edges[0]["node"]["id"])
         q = """
-        query($slug: String!) {
-            allDataset(organizations_Slug: $slug) {
+        query($org: ID) {
+            allDataset(organizations_Id: $org) {
                 totalCount
                 edges { node { id slug namePt description } }
             }
         }
         """
-        data = _gql(q, {"slug": organization_slug}, env=env, auth=False)
+        data = _gql(q, {"org": org_id}, env=env, auth=False)
     else:
         q = """
         {
