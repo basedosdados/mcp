@@ -1827,7 +1827,12 @@ def create_update_raw_data_source(
     description_en: str = "",
     description_es: str = "",
     has_structured_data: bool = True,
-    has_sensitive_data: bool = False,
+    is_free: bool | None = None,
+    contains_api: bool | None = None,
+    requires_registration: bool | None = None,
+    language_ids: list[str] | None = None,
+    status_id: str | None = None,
+    version: int | None = None,
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
@@ -1835,6 +1840,20 @@ def create_update_raw_data_source(
     Create or update a raw data source record on a dataset.
 
     Pass id to update an existing record; omit to create new.
+
+    Fields (booleans and status/version are only written when provided, so
+    partial updates never blank an existing value):
+        has_structured_data: source provides structured (tabular) data.
+        is_free: source is freely available at no cost.
+        contains_api: source is accessible via an API.
+        requires_registration: accessing the source requires registration/login.
+        language_ids: list of Language IDs (discover_ids/lookup_id category
+            "language") the source is published in, e.g. ["<en-id>"] for English.
+        status_id: Status ID (discover_ids category "status").
+        version: integer version of the source.
+
+    Note: the RawDataSource model has no sensitive-data field (sensitivity is a
+    column-level attribute), so no has_sensitive_data argument is accepted.
 
     Returns: {"id": str}
     """
@@ -1855,6 +1874,18 @@ def create_update_raw_data_source(
         fields["descriptionEn"] = description_en
     if description_es:
         fields["descriptionEs"] = description_es
+    if is_free is not None:
+        fields["isFree"] = is_free
+    if contains_api is not None:
+        fields["containsApi"] = contains_api
+    if requires_registration is not None:
+        fields["requiresRegistration"] = requires_registration
+    if language_ids:
+        fields["languages"] = language_ids
+    if status_id:
+        fields["status"] = status_id
+    if version is not None:
+        fields["version"] = version
     if id:
         fields["id"] = id
 
