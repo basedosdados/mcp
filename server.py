@@ -1779,35 +1779,59 @@ def create_update_datetime_range(
 
 @mcp.tool()
 def create_update_update(
-    table_id: str,
     entity_id: str,
     frequency: int,
-    lag: int,
     latest: str,
+    table_id: str | None = None,
+    raw_data_source_id: str | None = None,
+    lag: int | None = None,
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
     """
-    Create or update an update record (publishing cadence) on a table.
+    Create or update an update record (publishing cadence).
+
+    An Update hangs off EITHER a table or a raw data source, and the two mean
+    different things — a recurring dataset needs both:
+
+    - `table_id`: when WE last refreshed the table, and how often we do.
+      `latest` is a wall-clock timestamp of the last materialization.
+    - `raw_data_source_id`: what the SOURCE has published, and how often it
+      publishes. `latest` is the source's max coverage date (e.g.
+      "2026-06-01T00:00:00" for June data), NOT the time you looked.
+
+    Pass exactly one of the two.
 
     Args:
-        table_id: bare table ID
-        entity_id: bare entity ID for the update frequency unit (usually "year")
-        frequency: how many units between updates (e.g. 1 for annual)
-        lag: expected lag in the same units (e.g. 1 year)
-        latest: ISO datetime string of the latest update, e.g. "2025-03-28T14:30:00"
+        entity_id: bare entity ID for the frequency unit ("month", "year", …)
+        frequency: how many units between updates (e.g. 1 for monthly/annual)
+        latest: ISO datetime string; see the two meanings above
+        table_id: bare table ID — anchors the Update to a table
+        raw_data_source_id: bare raw data source ID — anchors it to a source
+        lag: expected lag in the same units (e.g. 1 = data for month M lands in
+            M+1). Omit when unknown; source-anchored Updates usually leave it
+            unset.
         id: bare update ID if updating
         env: "dev" or "prod"
 
     Returns: {"id": str}
     """
+    if (table_id is None) == (raw_data_source_id is None):
+        raise ValueError(
+            "pass exactly one of table_id or raw_data_source_id"
+        )
+
     fields: dict[str, Any] = {
-        "table": table_id,
         "entity": entity_id,
         "frequency": frequency,
-        "lag": lag,
         "latest": latest,
     }
+    if table_id:
+        fields["table"] = table_id
+    if raw_data_source_id:
+        fields["rawDataSource"] = raw_data_source_id
+    if lag is not None:
+        fields["lag"] = lag
     if id:
         fields["id"] = id
 
