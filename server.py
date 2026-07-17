@@ -1707,6 +1707,10 @@ def create_update_datetime_range(
     coverage_id: str,
     start_year: int,
     end_year: int,
+    start_month: int | None = None,
+    end_month: int | None = None,
+    start_day: int | None = None,
+    end_day: int | None = None,
     interval: int = 1,
     is_closed: bool = False,
     id: str | None = None,
@@ -1715,10 +1719,23 @@ def create_update_datetime_range(
     """
     Create or update a datetime range on a coverage.
 
+    Match the range's granularity to the table's: a monthly table needs
+    start_month/end_month, a daily table also needs start_day/end_day. Giving a
+    month-granular table a year-only range (e.g. 1913..2026 for data that really
+    spans 1913-01..2026-06) understates the coverage and renders wrong on the
+    site. Year-only is correct only for genuinely annual tables.
+
+    A day requires a month, and a month requires a year — on each side
+    independently.
+
     Args:
         coverage_id: bare coverage ID
         start_year: e.g. 2013
         end_year: e.g. 2025
+        start_month: 1-12; required for monthly/daily tables
+        end_month: 1-12; required for monthly/daily tables
+        start_day: 1-31; required for daily tables
+        end_day: 1-31; required for daily tables
         interval: years between observations (1 = annual)
         is_closed: True if the series has ended
         id: bare datetime range ID if updating
@@ -1726,6 +1743,13 @@ def create_update_datetime_range(
 
     Returns: {"id": str}
     """
+    for side, month, day in (
+        ("start", start_month, start_day),
+        ("end", end_month, end_day),
+    ):
+        if day is not None and month is None:
+            raise ValueError(f"{side}_day requires {side}_month")
+
     fields: dict[str, Any] = {
         "coverage": coverage_id,
         "startYear": start_year,
@@ -1733,6 +1757,14 @@ def create_update_datetime_range(
         "interval": interval,
         "isClosed": is_closed,
     }
+    for key, val in (
+        ("startMonth", start_month),
+        ("endMonth", end_month),
+        ("startDay", start_day),
+        ("endDay", end_day),
+    ):
+        if val is not None:
+            fields[key] = val
     if id:
         fields["id"] = id
 
