@@ -1665,6 +1665,7 @@ def create_update_cloud_table(
 def create_update_coverage(
     table_id: str,
     area_id: str,
+    is_closed: bool | None = None,
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
@@ -1674,12 +1675,21 @@ def create_update_coverage(
     Args:
         table_id: bare table ID
         area_id: bare area ID (e.g. the ID for area slug "br")
+        is_closed: False (default on create) = open/free data; True = BD Pro
+            data. A table paywalling a rolling window needs two coverages: the
+            free one (is_closed=False) and the pro one (is_closed=True), which
+            is what `Table.contains_closed_data` keys the Pro badge off, and
+            what the pipelines' `PartBdpro` coverage spec requires to exist
+            before it will run. Omit to leave the current value untouched, so a
+            routine update cannot silently un-paywall data.
         id: bare coverage ID if updating
         env: "dev" or "prod"
 
     Returns: {"id": str}
     """
     fields: dict[str, Any] = {"table": table_id, "area": area_id}
+    if is_closed is not None:
+        fields["isClosed"] = is_closed
     if id:
         fields["id"] = id
 
