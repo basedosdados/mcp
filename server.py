@@ -2560,35 +2560,89 @@ def query_bigquery(
 # Prefect helpers
 # ---------------------------------------------------------------------------
 
-PREFECT_URL = "https://prefect.basedosdados.org/api"
+# Prefect 3 exposes a REST API (no GraphQL). Filter endpoints take a JSON body
+# and return a list; flow runs carry only `flow_id`, so flow names are resolved
+# separately.
+PREFECT_URL = "https://prefect3.basedosdados.org/api"
+
+_LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
 
 
 def _prefect_key() -> str:
+    """Backend Token authorized for the prefect3 domain.
+
+    Despite the name, this is not a Prefect key: prefect3.basedosdados.org sits
+    behind an nginx ingress whose auth-url is backend.basedosdados.org/auth/,
+    and that view resolves a Domain from the request and requires the token to
+    be scoped to it. So the value is a backend Token (uuid4), and a token issued
+    for prefect.basedosdados.org — the Prefect 2 host, stored under the older
+    "prefect" key — is rejected here with a redirect to the login page.
+    """
     creds_path = Path.home() / ".basedosdados" / "credentials.json"
     if creds_path.exists():
         data = json.loads(creds_path.read_text())
-        key = data.get("prod", {}).get("prefect")
+        key = data.get("prod", {}).get("prefect3")
         if key:
             return key
     raise RuntimeError(
-        "No Prefect API key found. Add 'prefect' key under 'prod' in "
-        "~/.basedosdados/credentials.json"
+        "No prefect3 token found. Add a 'prefect3' key under 'prod' in "
+        "~/.basedosdados/credentials.json — a backend Token issued for the "
+        "prefect3.basedosdados.org domain (Django admin > Account Auth > "
+        "Tokens). The older 'prefect' key is scoped to the Prefect 2 host and "
+        "will not authenticate here."
     )
 
 
-def _prefect_gql(query: str, variables: dict | None = None) -> dict:
+def _prefect_post(path: str, body: dict) -> Any:
+    """POST to a Prefect 3 REST endpoint (e.g. '/flow_runs/filter')."""
     r = requests.post(
-        PREFECT_URL,
-        json={"query": query, "variables": variables or {}},
+        f"{PREFECT_URL}{path}",
+        json=body,
         headers={"Authorization": f"Bearer {_prefect_key()}"},
         timeout=60,
     )
     if not r.ok:
         raise RuntimeError(f"HTTP {r.status_code}:\n{r.text}")
-    data = r.json()
-    if "errors" in data:
-        raise RuntimeError(json.dumps(data["errors"], indent=2))
-    return data["data"]
+    return r.json()
+
+
+_PREFECT_PAGE_MAX = 200
+
+
+def _prefect_post_paged(path: str, body: dict, limit: int) -> list:
+    """POST to a filter endpoint, paging around Prefect's per-request row cap.
+
+    Prefect 3 rejects `limit > 200` outright ("Invalid limit: must be less than
+    or equal to 200"), so anything larger has to be walked with `offset`.
+    Clamping to 200 instead would silently return a truncated slice — the worse
+    failure, since a flow run's interesting log line is usually not in the first
+    200.
+    """
+    out: list = []
+    while len(out) < limit:
+        page = _prefect_post(
+            path,
+            {
+                **body,
+                "limit": min(_PREFECT_PAGE_MAX, limit - len(out)),
+                "offset": len(out),
+            },
+        )
+        out.extend(page)
+        if len(page) < _PREFECT_PAGE_MAX:
+            break  # exhausted
+    return out
+
+
+def _flow_names(flow_ids: list[str]) -> dict:
+    """Map flow_id -> flow name (flow runs only carry flow_id in Prefect 3)."""
+    ids = [i for i in dict.fromkeys(flow_ids) if i]
+    if not ids:
+        return {}
+    flows = _prefect_post(
+        "/flows/filter", {"flows": {"id": {"any_": ids}}, "limit": len(ids)}
+    )
+    return {f["id"]: f["name"] for f in flows}
 
 
 # ---------------------------------------------------------------------------
@@ -2605,46 +2659,30 @@ def list_flow_runs(
     """List recent Prefect flow runs.
 
     Args:
-        state: Filter by state, e.g. 'Failed', 'Success', 'Running'. None = all.
-        flow_name: Filter by flow name substring (case-sensitive). None = all.
+        state: Filter by state name, e.g. 'Failed', 'Completed', 'Running',
+               'Crashed', 'Cancelled'. None = all.
+        flow_name: Filter by flow name substring (case-insensitive). None = all.
         limit: Max number of runs to return (default 20, max 100).
     """
     limit = min(limit, 100)
 
-    where_parts = []
+    body: dict = {"limit": limit, "sort": "END_TIME_DESC"}
     if state:
-        where_parts.append(f'state: {{_eq: "{state}"}}')
+        body["flow_runs"] = {"state": {"name": {"any_": [state]}}}
     if flow_name:
-        where_parts.append(f'flow: {{name: {{_like: "%{flow_name}%"}}}}')
-    where_clause = "{" + ", ".join(where_parts) + "}" if where_parts else "{}"
+        body["flows"] = {"name": {"like_": flow_name}}
 
-    q = f"""
-    {{
-        flow_run(
-            where: {where_clause},
-            order_by: {{end_time: desc_nulls_last}},
-            limit: {limit}
-        ) {{
-            id
-            name
-            state
-            state_message
-            start_time
-            end_time
-            flow {{ name }}
-        }}
-    }}
-    """
-    runs = _prefect_gql(q)["flow_run"]
+    runs = _prefect_post("/flow_runs/filter", body)
+    names = _flow_names([r.get("flow_id") for r in runs])
     return [
         {
             "id": r["id"],
-            "name": r["name"],
-            "flow_name": r["flow"]["name"],
-            "state": r["state"],
-            "state_message": r["state_message"],
-            "start_time": r["start_time"],
-            "end_time": r["end_time"],
+            "name": r.get("name"),
+            "flow_name": names.get(r.get("flow_id")),
+            "state": (r.get("state") or {}).get("name"),
+            "state_message": (r.get("state") or {}).get("message"),
+            "start_time": r.get("start_time"),
+            "end_time": r.get("end_time"),
         }
         for r in runs
     ]
@@ -2662,35 +2700,34 @@ def get_flow_run_logs(
         flow_run_id: The UUID of the flow run.
         min_level: Minimum log level to return: 'DEBUG', 'INFO', 'WARNING', 'ERROR',
                    'CRITICAL'. None = all levels.
-        limit: Max number of log entries to return (default 200, max 500).
+        limit: Max number of log entries to return (default 200, max 2000).
+               Values above Prefect's 200-per-request cap are paged internally.
     """
-    limit = min(limit, 500)
+    limit = min(limit, 2000)
 
-    level_order = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-    level_filter = ""
+    logs_filter: dict = {"flow_run_id": {"any_": [flow_run_id]}}
     if min_level:
         upper = min_level.upper()
-        if upper not in level_order:
-            raise ValueError(f"min_level must be one of {level_order}; got {min_level!r}")
-        included = level_order[level_order.index(upper):]
-        levels_gql = "[" + ", ".join(f'"{l}"' for l in included) + "]"
-        level_filter = f", level: {{_in: {levels_gql}}}"
+        if upper not in _LOG_LEVELS:
+            raise ValueError(
+                f"min_level must be one of {list(_LOG_LEVELS)}; got {min_level!r}"
+            )
+        logs_filter["level"] = {"ge_": _LOG_LEVELS[upper]}
 
-    q = f"""
-    {{
-        log(
-            where: {{flow_run_id: {{_eq: "{flow_run_id}"}}{level_filter}}},
-            order_by: {{timestamp: asc}},
-            limit: {limit}
-        ) {{
-            timestamp
-            level
-            name
-            message
-        }}
-    }}
-    """
-    return _prefect_gql(q)["log"]
+    logs = _prefect_post_paged(
+        "/logs/filter",
+        {"logs": logs_filter, "sort": "TIMESTAMP_ASC"},
+        limit,
+    )
+    return [
+        {
+            "timestamp": lg.get("timestamp"),
+            "level": lg.get("level"),
+            "name": lg.get("name"),
+            "message": lg.get("message"),
+        }
+        for lg in logs
+    ]
 
 
 @mcp.tool()
