@@ -1009,7 +1009,11 @@ def upload_columns_from_sheet(
 
     The sheet must be shared as "Anyone with link can view". Expected columns:
       name, bigquery_type, description, temporal_coverage, covered_by_dictionary,
-      directory_column, measurement_unit, has_sensitive_data
+      directory_column, measurement_unit, has_sensitive_data, observations
+
+    NOTE: the sheet's bare `description` column is written to descriptionPt.
+    For an English-source sheet that leaves descriptionEn NULL — use
+    bulk_upsert_columns, which understands description_pt/en/es, instead.
 
     Args:
         table_id: bare table ID
@@ -1095,6 +1099,10 @@ def upload_columns_from_sheet(
 
         hsd = row.get("has_sensitive_data", "no").strip().lower()
         fields["containsSensitiveData"] = hsd in ("yes", "true", "1")
+
+        obs = row.get("observations", "").strip()
+        if obs:
+            fields["observations"] = obs
 
         if name in ol_map:
             fields["observationLevel"] = ol_map[name]
@@ -1227,7 +1235,11 @@ def bulk_upsert_columns(
            "description_es": "Edad", "covered_by_dictionary": true,
            "directory_column": "br_bd_diretorios_mundo.pais:sigla_iso3",
            "measurement_unit": "year", "has_sensitive_data": false,
+           "observations": "Top-coded at 90 from 2011 on.",
            "bigquery_type": "INT64"}]'
+
+    `observations` is the column's free-text notes field (source quirks,
+    caveats) — a single field, not per-language.
 
     Only fields present (non-empty) for a row are written; omitted fields are
     left untouched — no accidental blanking, and partition/primary-key flags are
@@ -1352,6 +1364,11 @@ def bulk_upsert_columns(
             fields["containsSensitiveData"] = hsd
             set_fields.append("containsSensitiveData")
 
+        obs = _get(row, "observations")
+        if obs:
+            fields["observations"] = obs
+            set_fields.append("observations")
+
         dir_col = _get(row, "directory_column")
         if dir_col:
             fk = _lookup_directory_column(dir_col, env)
@@ -1475,6 +1492,7 @@ def update_column(
     has_sensitive_data: bool = False,
     covered_by_dictionary: bool = False,
     directory_column_name: str = "",
+    observations: str = "",
     env: str = "dev",
 ) -> dict:
     """
@@ -1493,9 +1511,16 @@ def update_column(
         has_sensitive_data: sensitive data flag
         covered_by_dictionary: whether covered by the dataset dictionary
         directory_column_name: BD directories FK (e.g. "br_bd_diretorios_brasil.municipio:id_municipio")
+        observations: free-text notes on the column (the architecture sheet's
+            `observations` column) — caveats, source quirks, coverage notes.
+            Single field, not per-language. Empty leaves the stored value alone.
         env: "dev" or "prod"
 
     Returns: {"id": str, "name": str}
+
+    WARNING: the boolean args default to False, so a partial call CLOBBERS
+    is_partition / is_primary_key. Prefer bulk_upsert_columns for patches — it
+    writes only the fields you pass.
     """
     fields: dict[str, Any] = {
         "id": column_id,
@@ -1520,6 +1545,8 @@ def update_column(
         fields["containsSensitiveData"] = has_sensitive_data
     if covered_by_dictionary:
         fields["coveredByDictionary"] = covered_by_dictionary
+    if observations:
+        fields["observations"] = observations
     # Resolve the BD directories FK (e.g. "br_bd_diretorios_us.state:id_state")
     # to the target column node id and set it. The backend only accepts a target
     # whose column is is_primary_key=True and whose table is is_directory=True
