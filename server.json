@@ -1,0 +1,42 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.basedosdados/mcp",
+  "description": "Exposes the Base dos Dados (basedosdados.org) API as tools for AI agents: metadata search, BigQuery queries, and metadata registration.",
+  "repository": {
+    "url": "https://github.com/basedosdados/mcp",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "databasis-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Target backend environment: local, dev, staging, or prod. Defaults to dev.",
+          "isRequired": false,
+          "format": "string",
+          "name": "ENV"
+        },
+        {
+          "description": "GCP project charged for BigQuery queries. Falls back to ~/.basedosdados/credentials.json (gcp_project).",
+          "isRequired": false,
+          "format": "string",
+          "name": "GCP_PROJECT_ID"
+        },
+        {
+          "description": "Base dos Dados backend token (bdtoken_...). Required only for write tools; falls back to ~/.basedosdados/credentials.json.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true,
+          "name": "BACKEND_TOKEN"
+        }
+      ]
+    }
+  ]
+}

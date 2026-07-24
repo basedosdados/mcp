@@ -170,8 +170,27 @@ Cada ferramenta de cadastro aceita um parâmetro `env`:
 
 ## Instalação
 
+O projeto usa [uv](https://docs.astral.sh/uv/). Instale-o com:
+
 ```bash
-pip install -r requirements.txt
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### Uso via `uvx` (recomendado)
+
+Não é necessário clonar o repositório. O `uvx` baixa e executa o servidor em um ambiente isolado:
+
+```bash
+uvx databasis-mcp
+```
+
+### Desenvolvimento a partir do repositório
+
+```bash
+git clone https://github.com/basedosdados/mcp.git
+cd mcp
+uv sync          # cria o .venv e instala as dependências
+uv run server.py # executa o servidor
 ```
 
 ---
@@ -180,12 +199,12 @@ pip install -r requirements.txt
 
 As credenciais são lidas automaticamente de `~/.basedosdados/credentials.json` — não é necessário passá-las como variáveis de ambiente.
 
-Substitua `/caminho/para/python` e `/caminho/para/mcp/server.py` pelos caminhos corretos na sua máquina.
+Todos os exemplos abaixo usam `uvx`, que resolve e executa o servidor automaticamente.
 
 ### Claude Code (CLI)
 
 ```bash
-claude mcp add databasis -- /caminho/para/python /caminho/para/mcp/server.py
+claude mcp add databasis -- uvx databasis-mcp
 ```
 
 Ou adicione manualmente ao `~/.claude/settings.json`:
@@ -195,8 +214,8 @@ Ou adicione manualmente ao `~/.claude/settings.json`:
   "mcpServers": {
     "databasis": {
       "type": "stdio",
-      "command": "/caminho/para/python",
-      "args": ["/caminho/para/mcp/server.py"]
+      "command": "uvx",
+      "args": ["databasis-mcp"]
     }
   }
 }
@@ -215,8 +234,8 @@ Adicione ao `claude_desktop_config.json`:
 {
   "mcpServers": {
     "databasis": {
-      "command": "/caminho/para/python",
-      "args": ["/caminho/para/mcp/server.py"]
+      "command": "uvx",
+      "args": ["databasis-mcp"]
     }
   }
 }
@@ -231,8 +250,8 @@ Adicione ao `.vscode/mcp.json` no seu workspace (ou nas configurações globais 
   "servers": {
     "databasis": {
       "type": "stdio",
-      "command": "/caminho/para/python",
-      "args": ["/caminho/para/mcp/server.py"]
+      "command": "uvx",
+      "args": ["databasis-mcp"]
     }
   }
 }
@@ -246,11 +265,14 @@ Qualquer cliente compatível com MCP via stdio pode usar o mesmo padrão:
 {
   "mcpServers": {
     "databasis": {
-      "command": "/caminho/para/python",
-      "args": ["/caminho/para/mcp/server.py"]
+      "command": "uvx",
+      "args": ["databasis-mcp"]
     }
   }
 }
 ```
 
 Consulte a documentação do seu cliente para o local exato do arquivo de configuração.
+
+> **Rodando a partir de um clone local?** Substitua `"command": "uvx", "args": ["databasis-mcp"]`
+> por `"command": "uv", "args": ["run", "--directory", "/caminho/para/mcp", "server.py"]`.

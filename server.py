@@ -67,7 +67,7 @@ _cache: dict[str, Any] = {
     "token": None,
     "expires_at": 0.0,
     "env": None,
-    "ids": {},   # {cache_key: (result, fetched_at)}
+    "ids": {},  # {cache_key: (result, fetched_at)}
 }
 _IDS_TTL = 30  # seconds
 
@@ -124,7 +124,9 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
     """
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
-        raise ValueError(f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}")
+        raise ValueError(
+            f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}"
+        )
 
     base_url = URLS[env]
     creds = _get_credentials(env)
@@ -163,10 +165,17 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _gql(query: str, variables: dict | None = None, env: str | None = None, auth: bool = True) -> dict:
+def _gql(
+    query: str,
+    variables: dict | None = None,
+    env: str | None = None,
+    auth: bool = True,
+) -> dict:
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
-        raise ValueError(f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}")
+        raise ValueError(
+            f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}"
+        )
     base_url = URLS[env]
     headers: dict[str, str] = {}
     if auth:
@@ -220,15 +229,19 @@ def _lookup_directory_column(directory_column_str: str, env: str) -> str | None:
 
     Format: "<dataset_slug>.<table_slug>:<column_name>"
     """
-    if not directory_column_str or "." not in directory_column_str or ":" not in directory_column_str:
+    if (
+        not directory_column_str
+        or "." not in directory_column_str
+        or ":" not in directory_column_str
+    ):
         return None
     dot_pos = directory_column_str.rfind(".")
     colon_pos = directory_column_str.find(":", dot_pos)
     if colon_pos == -1:
         return None
     dataset_slug = directory_column_str[:dot_pos]
-    table_slug = directory_column_str[dot_pos + 1:colon_pos]
-    column_name = directory_column_str[colon_pos + 1:]
+    table_slug = directory_column_str[dot_pos + 1 : colon_pos]
+    column_name = directory_column_str[colon_pos + 1 :]
 
     gql = """
     query($slug: String!) {
@@ -265,14 +278,16 @@ def _lookup_directory_column(directory_column_str: str, env: str) -> str | None:
     # Retry without common BD prefixes (e.g. "br_bd_" → "") used in dev
     for prefix in ("br_bd_", "br_"):
         if dataset_slug.startswith(prefix):
-            result = _search(dataset_slug[len(prefix):])
+            result = _search(dataset_slug[len(prefix) :])
             if result:
                 return result
 
     return None
 
 
-def _fetch_all(token_env: str, query_name: str, fields: str, auth: bool = True) -> list[dict]:
+def _fetch_all(
+    token_env: str, query_name: str, fields: str, auth: bool = True
+) -> list[dict]:
     nodes: list[dict] = []
     cursor: str | None = None
     while True:
@@ -314,7 +329,12 @@ def auth(env: str = "dev") -> dict:
         {"authenticated": True, "env": env, "base_url": url}
     """
     token, base_url = _get_token(env)
-    return {"authenticated": True, "env": env, "base_url": base_url, "token_cached": True}
+    return {
+        "authenticated": True,
+        "env": env,
+        "base_url": base_url,
+        "token_cached": True,
+    }
 
 
 @mcp.tool()
@@ -344,8 +364,16 @@ def discover_ids(
     Returns a dict mapping category → {slug: id}.
     """
     _DEFAULT_KEYS = [
-        "status", "bigquery_type", "entity", "license", "availability",
-        "organization", "theme", "tag", "entity_category", "language",
+        "status",
+        "bigquery_type",
+        "entity",
+        "license",
+        "availability",
+        "organization",
+        "theme",
+        "tag",
+        "entity_category",
+        "language",
         "measurement_unit_category",
     ]
     requested = set(keys) if keys else set(_DEFAULT_KEYS)
@@ -367,7 +395,9 @@ def discover_ids(
         for qname in ["allBigquerytype", "allBigQueryType"]:
             try:
                 nodes = _fetch_all(env, qname, "id name", auth=False)
-                result["bigquery_type"] = {n["name"]: _strip_id(n["id"]) for n in nodes}
+                result["bigquery_type"] = {
+                    n["name"]: _strip_id(n["id"]) for n in nodes
+                }
                 break
             except Exception:
                 continue
@@ -400,15 +430,21 @@ def discover_ids(
 
     if "entity_category" in requested:
         nodes = _fetch_all(env, "allEntityCategory", "id slug name", auth=False)
-        result["entity_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+        result["entity_category"] = {
+            n["slug"]: _strip_id(n["id"]) for n in nodes
+        }
 
     if "language" in requested:
         nodes = _fetch_all(env, "allLanguage", "id slug name", auth=False)
         result["language"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "measurement_unit_category" in requested:
-        nodes = _fetch_all(env, "allMeasurementUnitCategory", "id slug name", auth=False)
-        result["measurement_unit_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+        nodes = _fetch_all(
+            env, "allMeasurementUnitCategory", "id slug name", auth=False
+        )
+        result["measurement_unit_category"] = {
+            n["slug"]: _strip_id(n["id"]) for n in nodes
+        }
 
     if "ids" not in _cache:
         _cache["ids"] = {}
@@ -448,9 +484,11 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
     Returns: {"slug": str, "id": str, "name": str}
     """
     if category not in _CATEGORY_QUERY_MAP:
-        raise ValueError(f"Unknown category {category!r}. Valid: {list(_CATEGORY_QUERY_MAP)}")
+        raise ValueError(
+            f"Unknown category {category!r}. Valid: {list(_CATEGORY_QUERY_MAP)}"
+        )
     query_name, fields = _CATEGORY_QUERY_MAP[category]
-    q = f'query($slug: String!) {{ {query_name}(slug: $slug, first: 1) {{ edges {{ node {{ {fields} }} }} }} }}'
+    q = f"query($slug: String!) {{ {query_name}(slug: $slug, first: 1) {{ edges {{ node {{ {fields} }} }} }} }}"
     data = _gql(q, {"slug": slug}, env=env, auth=False)
     edges = data[query_name]["edges"]
     if not edges:
@@ -458,7 +496,6 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
     node = edges[0]["node"]
     name = node.get("namePt") or node.get("name") or node.get("slug")
     return {"slug": node["slug"], "id": _strip_id(node["id"]), "name": name}
-
 
 
 @mcp.tool()
@@ -482,7 +519,9 @@ def list_datasets(
         # allDataset supports organizations_Id, not organizations_Slug, so
         # resolve the org slug to its id first.
         org_q = "query($slug: String!) { allOrganization(slug: $slug, first: 1) { edges { node { id } } } }"
-        org_edges = _gql(org_q, {"slug": organization_slug}, env=env, auth=False)["allOrganization"]["edges"]
+        org_edges = _gql(
+            org_q, {"slug": organization_slug}, env=env, auth=False
+        )["allOrganization"]["edges"]
         if not org_edges:
             return {"total": 0, "datasets": []}
         org_id = _strip_id(org_edges[0]["node"]["id"])
@@ -603,9 +642,16 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
     gated = """publishedBy(first: 10) { edges { node { id email } } }
                                 dataCleanedBy(first: 10) { edges { node { id email } } }"""
     try:
-        data = _gql(q.replace("__GATED_FIELDS__", gated), {"slug": slug}, env=env)
+        data = _gql(
+            q.replace("__GATED_FIELDS__", gated), {"slug": slug}, env=env
+        )
     except (RuntimeError, requests.RequestException):
-        data = _gql(q.replace("__GATED_FIELDS__", ""), {"slug": slug}, env=env, auth=False)
+        data = _gql(
+            q.replace("__GATED_FIELDS__", ""),
+            {"slug": slug},
+            env=env,
+            auth=False,
+        )
     edges = data["allDataset"]["edges"]
     if not edges:
         return {"found": False, "id": None, "slug": slug, "tables": {}}
@@ -623,8 +669,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "observation_levels": [
                 {
                     "id": _strip_id(ol["node"]["id"]),
-                    "entity_id": _strip_id(ol["node"]["entity"]["id"]) if ol["node"].get("entity") else None,
-                    "entity_slug": ol["node"]["entity"]["slug"] if ol["node"].get("entity") else None,
+                    "entity_id": _strip_id(ol["node"]["entity"]["id"])
+                    if ol["node"].get("entity")
+                    else None,
+                    "entity_slug": ol["node"]["entity"]["slug"]
+                    if ol["node"].get("entity")
+                    else None,
                 }
                 for ol in t["observationLevels"]["edges"]
             ],
@@ -640,8 +690,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "coverages": [
                 {
                     "id": _strip_id(cov["node"]["id"]),
-                    "area_id": _strip_id(cov["node"]["area"]["id"]) if cov["node"].get("area") else None,
-                    "area_slug": cov["node"]["area"]["slug"] if cov["node"].get("area") else None,
+                    "area_id": _strip_id(cov["node"]["area"]["id"])
+                    if cov["node"].get("area")
+                    else None,
+                    "area_slug": cov["node"]["area"]["slug"]
+                    if cov["node"].get("area")
+                    else None,
                     "datetime_ranges": [
                         {
                             "id": _strip_id(dtr["node"]["id"]),
@@ -657,8 +711,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "updates": [
                 {
                     "id": _strip_id(upd["node"]["id"]),
-                    "entity_id": _strip_id(upd["node"]["entity"]["id"]) if upd["node"].get("entity") else None,
-                    "entity_slug": upd["node"]["entity"]["slug"] if upd["node"].get("entity") else None,
+                    "entity_id": _strip_id(upd["node"]["entity"]["id"])
+                    if upd["node"].get("entity")
+                    else None,
+                    "entity_slug": upd["node"]["entity"]["slug"]
+                    if upd["node"].get("entity")
+                    else None,
                 }
                 for upd in t["updates"]["edges"]
             ],
@@ -682,9 +740,18 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         "description_pt": ds.get("descriptionPt"),
         "description_en": ds.get("descriptionEn"),
         "description_es": ds.get("descriptionEs"),
-        "organizations": [{"id": _strip_id(o["node"]["id"]), "slug": o["node"]["slug"]} for o in ds["organizations"]["edges"]],
-        "themes": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["themes"]["edges"]],
-        "tags": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["tags"]["edges"]],
+        "organizations": [
+            {"id": _strip_id(o["node"]["id"]), "slug": o["node"]["slug"]}
+            for o in ds["organizations"]["edges"]
+        ],
+        "themes": [
+            {"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]}
+            for t in ds["themes"]["edges"]
+        ],
+        "tags": [
+            {"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]}
+            for t in ds["tags"]["edges"]
+        ],
         "tables": tables,
     }
 
@@ -779,7 +846,9 @@ def reorder_observation_levels(
     )
     payload = result["reorderObservationLevels"]
     if not payload["ok"]:
-        raise RuntimeError(f"reorderObservationLevels failed: {payload['errors']}")
+        raise RuntimeError(
+            f"reorderObservationLevels failed: {payload['errors']}"
+        )
     return {"reordered": len(ol_ids)}
 
 
@@ -883,7 +952,9 @@ def create_update_dataset(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateDataset", fields, "dataset { id slug }", env=env)
+    payload = _mut(
+        "CreateUpdateDataset", fields, "dataset { id slug }", env=env
+    )
     ds = payload["dataset"]
     return {"id": _strip_id(ds["id"]), "slug": ds["slug"]}
 
@@ -942,7 +1013,9 @@ def create_update_table(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateTable", fields, "table { id slug namePt }", env=env)
+    payload = _mut(
+        "CreateUpdateTable", fields, "table { id slug namePt }", env=env
+    )
     t = payload["table"]
     return {"id": _strip_id(t["id"]), "slug": t["slug"]}
 
@@ -990,7 +1063,11 @@ def upload_columns(
         },
         timeout=120,
     )
-    return {"success": resp.ok, "status_code": resp.status_code, "text": resp.text[:500]}
+    return {
+        "success": resp.ok,
+        "status_code": resp.status_code,
+        "text": resp.text[:500],
+    }
 
 
 @mcp.tool()
@@ -1031,17 +1108,25 @@ def upload_columns_from_sheet(
 
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", architecture_url)
     if not match:
-        raise ValueError(f"Cannot extract sheet ID from URL: {architecture_url}")
+        raise ValueError(
+            f"Cannot extract sheet ID from URL: {architecture_url}"
+        )
     sheet_id = match.group(1)
 
-    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    )
     resp = requests.get(csv_url, timeout=30, allow_redirects=True)
     if not resp.ok:
-        raise RuntimeError(f"Failed to download sheet CSV: HTTP {resp.status_code}")
+        raise RuntimeError(
+            f"Failed to download sheet CSV: HTTP {resp.status_code}"
+        )
 
-    rows = list(csv.DictReader(io.StringIO(resp.content.decode('utf-8'))))
+    rows = list(csv.DictReader(io.StringIO(resp.content.decode("utf-8"))))
 
-    ol_map: dict[str, str] = json.loads(observation_levels) if observation_levels.strip() else {}
+    ol_map: dict[str, str] = (
+        json.loads(observation_levels) if observation_levels.strip() else {}
+    )
 
     ids = discover_ids(env=env, keys=["bigquery_type", "status"])
     bq_type_ids: dict[str, str] = ids.get("bigquery_type", {})
@@ -1122,11 +1207,12 @@ def upload_columns_from_sheet(
     auth_header, base_url = _get_token(env)
     variables = {f"input{i}": inp for i, inp in enumerate(column_inputs)}
     aliases = "\n".join(
-        f'  col{i}: CreateUpdateColumn(input: $input{i}) {{ errors {{ field messages }} column {{ id name }} }}'
+        f"  col{i}: CreateUpdateColumn(input: $input{i}) {{ errors {{ field messages }} column {{ id name }} }}"
         for i in range(len(column_inputs))
     )
     var_defs = ", ".join(
-        f"$input{i}: CreateUpdateColumnInput!" for i in range(len(column_inputs))
+        f"$input{i}: CreateUpdateColumnInput!"
+        for i in range(len(column_inputs))
     )
     query = f"mutation({var_defs}) {{\n{aliases}\n}}"
 
@@ -1156,11 +1242,15 @@ def upload_columns_from_sheet(
             # fails the WHOLE column. Retry once without the FK so the column is
             # still created — matching the "silently skip the FK" contract.
             if "directoryPrimaryKey" in inp:
-                retry_inputs.append({k: v for k, v in inp.items() if k != "directoryPrimaryKey"})
+                retry_inputs.append(
+                    {k: v for k, v in inp.items() if k != "directoryPrimaryKey"}
+                )
             else:
                 errors.append({"name": name, "error": payload["errors"]})
         elif payload.get("column"):
-            created.append({"name": name, "id": _strip_id(payload["column"]["id"])})
+            created.append(
+                {"name": name, "id": _strip_id(payload["column"]["id"])}
+            )
         else:
             errors.append({"name": name, "error": "no column returned"})
 
@@ -1176,17 +1266,34 @@ def upload_columns_from_sheet(
             if pay.get("errors"):
                 errors.append({"name": inp["name"], "error": pay["errors"]})
             elif pay.get("column"):
-                created.append({
-                    "name": inp["name"],
-                    "id": _strip_id(pay["column"]["id"]),
-                    "note": "created without directoryPrimaryKey (FK rejected)",
-                })
+                created.append(
+                    {
+                        "name": inp["name"],
+                        "id": _strip_id(pay["column"]["id"]),
+                        "note": "created without directoryPrimaryKey (FK rejected)",
+                    }
+                )
             else:
-                errors.append({"name": inp["name"], "error": "no column returned on retry"})
+                errors.append(
+                    {
+                        "name": inp["name"],
+                        "error": "no column returned on retry",
+                    }
+                )
         except Exception as e:
-            errors.append({"name": inp["name"], "error": f"retry without directoryPrimaryKey failed: {e}"})
+            errors.append(
+                {
+                    "name": inp["name"],
+                    "error": f"retry without directoryPrimaryKey failed: {e}",
+                }
+            )
 
-    return {"created": len(created), "columns": created, "errors": errors, "skipped": skipped}
+    return {
+        "created": len(created),
+        "columns": created,
+        "errors": errors,
+        "skipped": skipped,
+    }
 
 
 def _fetch_table_columns(table_id: str, env: str) -> list[dict]:
@@ -1267,22 +1374,32 @@ def bulk_upsert_columns(
     import re
 
     if bool(architecture_url.strip()) == bool(columns_json.strip()):
-        raise ValueError("Provide exactly one of architecture_url or columns_json.")
+        raise ValueError(
+            "Provide exactly one of architecture_url or columns_json."
+        )
 
     # --- load source rows -------------------------------------------------
     if architecture_url.strip():
         match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", architecture_url)
         if not match:
-            raise ValueError(f"Cannot extract sheet ID from URL: {architecture_url}")
+            raise ValueError(
+                f"Cannot extract sheet ID from URL: {architecture_url}"
+            )
         csv_url = f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv"
         resp = requests.get(csv_url, timeout=30, allow_redirects=True)
         if not resp.ok:
-            raise RuntimeError(f"Failed to download sheet CSV: HTTP {resp.status_code}")
-        rows: list[dict] = list(csv.DictReader(io.StringIO(resp.content.decode("utf-8"))))
+            raise RuntimeError(
+                f"Failed to download sheet CSV: HTTP {resp.status_code}"
+            )
+        rows: list[dict] = list(
+            csv.DictReader(io.StringIO(resp.content.decode("utf-8")))
+        )
     else:
         rows = json.loads(columns_json)
         if not isinstance(rows, list):
-            raise ValueError("columns_json must be a JSON list of column dicts.")
+            raise ValueError(
+                "columns_json must be a JSON list of column dicts."
+            )
 
     def _get(row: dict, *keys: str) -> str:
         for k in keys:
@@ -1390,7 +1507,11 @@ def bulk_upsert_columns(
 
         inputs.append(fields)
         actions.append(
-            {"name": name, "action": "update" if is_update else "create", "sets": set_fields}
+            {
+                "name": name,
+                "action": "update" if is_update else "create",
+                "sets": set_fields,
+            }
         )
 
     result: dict[str, Any] = {
@@ -1426,7 +1547,9 @@ def bulk_upsert_columns(
             f"{{ errors {{ field messages }} column {{ id name }} }}"
             for i in range(len(batch))
         )
-        var_defs = ", ".join(f"$input{i}: CreateUpdateColumnInput!" for i in range(len(batch)))
+        var_defs = ", ".join(
+            f"$input{i}: CreateUpdateColumnInput!" for i in range(len(batch))
+        )
         query = f"mutation({var_defs}) {{\n{aliases}\n}}"
         r = requests.post(
             f"{base_url}/graphql",
@@ -1445,9 +1568,18 @@ def bulk_upsert_columns(
                 # A rejected directoryPrimaryKey fails the whole column; retry
                 # once without the FK (mirrors upload_columns_from_sheet).
                 if "directoryPrimaryKey" in inp:
-                    retry = {k: v for k, v in inp.items() if k != "directoryPrimaryKey"}
+                    retry = {
+                        k: v
+                        for k, v in inp.items()
+                        if k != "directoryPrimaryKey"
+                    }
                     try:
-                        rr = _mut("CreateUpdateColumn", retry, "column { id name }", env=env)
+                        rr = _mut(
+                            "CreateUpdateColumn",
+                            retry,
+                            "column { id name }",
+                            env=env,
+                        )
                         if rr.get("column"):
                             if "id" in inp:
                                 updated += 1
@@ -1455,7 +1587,12 @@ def bulk_upsert_columns(
                                 created += 1
                             continue
                     except Exception as e:
-                        errors.append({"name": inp["name"], "error": f"retry w/o FK failed: {e}"})
+                        errors.append(
+                            {
+                                "name": inp["name"],
+                                "error": f"retry w/o FK failed: {e}",
+                            }
+                        )
                         continue
                 errors.append({"name": inp["name"], "error": payload["errors"]})
             elif payload.get("column"):
@@ -1464,11 +1601,13 @@ def bulk_upsert_columns(
                 else:
                     created += 1
             else:
-                errors.append({"name": inp["name"], "error": "no column returned"})
+                errors.append(
+                    {"name": inp["name"], "error": "no column returned"}
+                )
 
     bs = max(1, min(int(batch_size), 100))
     for start in range(0, len(inputs), bs):
-        _run_batch(inputs[start:start + bs])
+        _run_batch(inputs[start : start + bs])
 
     result["updated"] = updated
     result["created"] = created
@@ -1844,9 +1983,7 @@ def create_update_update(
     Returns: {"id": str}
     """
     if (table_id is None) == (raw_data_source_id is None):
-        raise ValueError(
-            "pass exactly one of table_id or raw_data_source_id"
-        )
+        raise ValueError("pass exactly one of table_id or raw_data_source_id")
 
     fields: dict[str, Any] = {
         "entity": entity_id,
@@ -1906,11 +2043,13 @@ def get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
     results = []
     for e in edges[0]["node"]["rawDataSources"]["edges"]:
         n = e["node"]
-        results.append({
-            "id": _strip_id(n["id"]),
-            "name": n.get("name", ""),
-            "url": n.get("url", ""),
-        })
+        results.append(
+            {
+                "id": _strip_id(n["id"]),
+                "name": n.get("name", ""),
+                "url": n.get("url", ""),
+            }
+        )
     return results
 
 
@@ -1989,7 +2128,9 @@ def create_update_raw_data_source(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateRawDataSource", fields, "rawdatasource { id }", env=env)
+    payload = _mut(
+        "CreateUpdateRawDataSource", fields, "rawdatasource { id }", env=env
+    )
     return {"id": _strip_id(payload["rawdatasource"]["id"])}
 
 
@@ -2108,7 +2249,9 @@ def create_update_organization(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateOrganization", fields, "organization { id slug }", env=env)
+    payload = _mut(
+        "CreateUpdateOrganization", fields, "organization { id slug }", env=env
+    )
     o = payload["organization"]
     return {"id": _strip_id(o["id"]), "slug": o["slug"]}
 
@@ -2139,7 +2282,9 @@ def _create_update_ref(
         fields.update({k: v for k, v in extra.items() if v not in (None, "")})
     if id:
         fields["id"] = id
-    payload = _mut(mutation_name, fields, f"{result_field} {{ id slug }}", env=env)
+    payload = _mut(
+        mutation_name, fields, f"{result_field} {{ id slug }}", env=env
+    )
     o = payload[result_field]
     return {"id": _strip_id(o["id"]), "slug": o["slug"]}
 
@@ -2170,8 +2315,15 @@ def create_update_license(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateLicense", "license", slug, name_pt, name_en, name_es,
-        id=id, extra={"url": url}, env=env,
+        "CreateUpdateLicense",
+        "license",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        extra={"url": url},
+        env=env,
     )
 
 
@@ -2192,8 +2344,14 @@ def create_update_availability(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateAvailability", "availability", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateAvailability",
+        "availability",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -2214,8 +2372,14 @@ def create_update_language(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateLanguage", "language", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateLanguage",
+        "language",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -2236,8 +2400,14 @@ def create_update_status(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateStatus", "status", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateStatus",
+        "status",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -2259,8 +2429,14 @@ def create_update_entity_category(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateEntityCategory", "entitycategory", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateEntityCategory",
+        "entitycategory",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -2286,8 +2462,15 @@ def create_update_entity(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateEntity", "entity", slug, name_pt, name_en, name_es,
-        id=id, extra={"category": category_id}, env=env,
+        "CreateUpdateEntity",
+        "entity",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        extra={"category": category_id},
+        env=env,
     )
 
 
@@ -2309,8 +2492,14 @@ def create_update_measurement_unit_category(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateMeasurementUnitCategory", "measurementunitcategory",
-        slug, name_pt, name_en, name_es, id=id, env=env,
+        "CreateUpdateMeasurementUnitCategory",
+        "measurementunitcategory",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -2340,9 +2529,18 @@ def create_update_area(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateArea", "area", slug, name_pt, name_en, name_es, id=id,
-        extra={"administrativeLevel": administrative_level, "entity": entity_id,
-               "parent": parent_id},
+        "CreateUpdateArea",
+        "area",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        extra={
+            "administrativeLevel": administrative_level,
+            "entity": entity_id,
+            "parent": parent_id,
+        },
         env=env,
     )
 
@@ -2359,7 +2557,11 @@ def get_authenticated_account(env: str = "dev") -> dict:
         email = creds[1]
     else:
         creds_path = Path.home() / ".basedosdados" / "credentials.json"
-        env_data = json.loads(creds_path.read_text()).get(env, {}) if creds_path.exists() else {}
+        env_data = (
+            json.loads(creds_path.read_text()).get(env, {})
+            if creds_path.exists()
+            else {}
+        )
         email = os.environ.get("EMAIL") or env_data.get("email")
         if not email:
             raise RuntimeError(
@@ -2367,7 +2569,7 @@ def get_authenticated_account(env: str = "dev") -> dict:
                 'Add an "email" field next to the token in ~/.basedosdados/credentials.json.'
             )
     data = _gql(
-        'query($email: String!) { allAccount(first: 1, email: $email) { edges { node { id email } } } }',
+        "query($email: String!) { allAccount(first: 1, email: $email) { edges { node { id email } } } }",
         {"email": email},
         env=env,
     )
@@ -2385,7 +2587,9 @@ def get_authenticated_account(env: str = "dev") -> dict:
 
 def _get_bq_client(billing_project: str | None = None):
     """Return a BigQuery client, resolving billing project from arg → env var → credentials file."""
-    from google.cloud import bigquery  # deferred import: only needed for BQ tools
+    from google.cloud import (
+        bigquery,  # deferred import: only needed for BQ tools
+    )
 
     project = billing_project or os.environ.get("GCP_PROJECT_ID")
     if not project:
@@ -2412,6 +2616,7 @@ def _bq_row_to_dict(row) -> dict:
         if isinstance(value, (datetime, date)):
             result[key] = value.isoformat()
         elif isinstance(value, Decimal):
+            # pyrefly: ignore [unsupported-operation]
             result[key] = float(value)
         else:
             result[key] = value
@@ -2462,7 +2667,9 @@ def search_datasets(
             "slug": e["node"]["slug"],
             "name_pt": e["node"].get("namePt"),
             "description_pt": e["node"].get("descriptionPt"),
-            "organizations": [o["node"]["slug"] for o in e["node"]["organizations"]["edges"]],
+            "organizations": [
+                o["node"]["slug"] for o in e["node"]["organizations"]["edges"]
+            ],
             "themes": [t["node"]["slug"] for t in e["node"]["themes"]["edges"]],
         }
         for e in result["edges"]
@@ -2520,11 +2727,15 @@ def preview_table(
             table_node = te["node"]
             break
     if table_node is None:
-        raise RuntimeError(f"Tabela {table_slug!r} não encontrada no dataset {dataset_slug!r}")
+        raise RuntimeError(
+            f"Tabela {table_slug!r} não encontrada no dataset {dataset_slug!r}"
+        )
 
     ct_edges = table_node["cloudTables"]["edges"]
     if not ct_edges:
-        raise RuntimeError(f"Tabela {table_slug!r} não possui referência BigQuery registrada")
+        raise RuntimeError(
+            f"Tabela {table_slug!r} não possui referência BigQuery registrada"
+        )
 
     ct = ct_edges[0]["node"]
     bq_table = f"{ct['gcpProjectId']}.{ct['gcpDatasetId']}.{ct['gcpTableId']}"
@@ -2592,7 +2803,13 @@ def query_bigquery(
 # separately.
 PREFECT_URL = "https://prefect3.basedosdados.org/api"
 
-_LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+_LOG_LEVELS = {
+    "DEBUG": 10,
+    "INFO": 20,
+    "WARNING": 30,
+    "ERROR": 40,
+    "CRITICAL": 50,
+}
 
 
 def _prefect_key() -> str:
@@ -2792,5 +3009,11 @@ def get_failed_flow_runs(
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
+    """Console-script entry point (``databasis-mcp``)."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
