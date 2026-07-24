@@ -5,7 +5,7 @@ description = "MCP server exposing the Base dos Dados (basedosdados.org) API —
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Base dos Dados", email = "contato@basedosdados.org" }]
+authors = [{ name = "Ricardo Dahis", email = "rdahis@basedosdados.org" }]
 keywords = ["mcp", "basedosdados", "bigquery", "llm", "data"]
 classifiers = [
     "Programming Language :: Python :: 3",
