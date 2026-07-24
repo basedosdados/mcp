@@ -1,0 +1,63 @@
+[project]
+name = "databasis-mcp"
+version = "0.1.0"
+description = "MCP server exposing the Base dos Dados (basedosdados.org) API — metadata search, BigQuery queries, and metadata registration — as tools for AI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Ricardo Dahis", email = "rdahis@basedosdados.org" }]
+keywords = ["mcp", "basedosdados", "bigquery", "llm", "data"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "fastmcp>=3.4,<4",
+    "requests>=2.31",
+    "google-cloud-bigquery>=3.0",
+    "types-requests>=2.33.0.20260712",
+]
+
+[project.urls]
+Homepage = "https://basedosdados.org"
+Repository = "https://github.com/basedosdados/mcp"
+
+[project.scripts]
+databasis-mcp = "server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["server.py"]
+
+[dependency-groups]
+dev = [
+    "pyrefly>=1.1.1",
+    "ruff>=0.16.0",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 80
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+
+ignore = [
+  # line-to-long
+  "E501"
+]
+
+[tool.pyrefly]
+project-includes = ["server.py"]
+python-version = "3.11"
