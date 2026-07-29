@@ -2633,6 +2633,18 @@ def _prefect_post(path: str, body: dict) -> Any:
     return r.json()
 
 
+def _prefect_get(path: str) -> Any:
+    """GET from a Prefect 3 REST endpoint (e.g. '/deployments/name/<flow>/<deploy>')."""
+    r = requests.get(
+        f"{PREFECT_URL}{path}",
+        headers={"Authorization": f"Bearer {_prefect_key()}"},
+        timeout=60,
+    )
+    if not r.ok:
+        raise RuntimeError(f"HTTP {r.status_code}:\n{r.text}")
+    return r.json()
+
+
 _PREFECT_PAGE_MAX = 200
 
 
@@ -2786,6 +2798,56 @@ def get_failed_flow_runs(
         )
         result.append({**run, "logs": logs})
     return result
+
+
+@mcp.tool()
+def run_deployment(
+    deployment_name: str,
+    parameters: dict | None = None,
+) -> dict:
+    """Trigger a Prefect 3 flow run from a deployment (creates a run immediately).
+
+    Creates a Scheduled flow run that the deployment's worker picks up and runs.
+    `parameters` overrides the deployment's default parameter values; omit it (or
+    pass None) to run with the deployment defaults.
+
+    Args:
+        deployment_name: '<flow_name>/<deployment_name>', e.g.
+                         'br_me_siconfi/br_me_siconfi_flow'. Must contain exactly
+                         one '/'.
+        parameters: Flow parameters overriding the deployment defaults. None = {}.
+
+    Returns:
+        On success, a dict with 'flow_run_id', 'name', 'state', and 'ui_url'.
+        On failure, a dict with an 'error' key describing the problem.
+    """
+    parts = deployment_name.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return {
+            "error": (
+                "deployment_name must be '<flow_name>/<deployment_name>' with "
+                f"exactly one '/'; got {deployment_name!r}"
+            )
+        }
+    flow_name, deploy_name = parts
+
+    try:
+        deployment = _prefect_get(f"/deployments/name/{flow_name}/{deploy_name}")
+        deployment_id = deployment["id"]
+        run = _prefect_post(
+            f"/deployments/{deployment_id}/create_flow_run",
+            {"parameters": parameters or {}},
+        )
+    except Exception as e:  # surface any HTTP/network error as a dict, never raise
+        return {"error": str(e)}
+
+    flow_run_id = run.get("id")
+    return {
+        "flow_run_id": flow_run_id,
+        "name": run.get("name"),
+        "state": (run.get("state") or {}).get("name"),
+        "ui_url": f"https://prefect3.basedosdados.org/v2/runs/flow-run/{flow_run_id}",
+    }
 
 
 # ---------------------------------------------------------------------------
