@@ -2850,6 +2850,73 @@ def run_deployment(
     }
 
 
+@mcp.tool()
+def set_deployment_schedule_active(
+    flow_name: str,
+    active: bool,
+    env: str = "prod",
+) -> dict:
+    """Arm or disarm a deployment's schedule (the API equivalent of the admin tick).
+
+    A merge to main deploys a flow **paused**, and the backend registers it with
+    `is_schedule_active=False`. Arming means three things together: update that
+    stored flag, stamp `reactivated_at`, and unpause the deployment in Prefect 3.
+    This calls `POST /admin-tools/set-schedule-active/`, which does all three.
+
+    Do not reach for the Prefect API directly to unpause. `sync-deployments` —
+    which CI runs on every merge to main — re-enforces the stored
+    `is_schedule_active` state, so a Prefect-only unpause looks armed and then
+    silently re-pauses at the next unrelated merge.
+
+    Setting the state a flow is already in is a safe no-op (`action="no_change"`)
+    and never touches Prefect, so it doubles as a way to read the current state.
+
+    Before arming a pipeline for the first time, know what the first run does: it
+    is the first-ever execution of the prod upload, and for a `part_bdpro` table
+    also of the BigQuery Row Access Policies. Watch that run.
+
+    Args:
+        flow_name: Deployment name as Prefect knows it, usually
+            '<dataset>/<dataset>_flow' — the same string shown in the Django
+            admin's `flow_name` column.
+        active: True to arm (unpause), False to disarm (pause). Disarming is the
+            kill switch for a misbehaving pipeline.
+        env: Backend to target: 'prod' (default), 'staging', 'dev' or 'local'.
+
+    Returns:
+        On success, a dict with 'flow_name', 'deployment_id',
+        'is_schedule_active', 'reactivated_at' and 'action' (one of 'activated',
+        'disabled', 'no_change').
+        On failure, a dict with an 'error' key describing the problem.
+    """
+    base = URLS.get(env)
+    if base is None:
+        return {"error": f"unknown env {env!r}; use one of {sorted(URLS)}"}
+
+    try:
+        r = requests.post(
+            f"{base}/admin-tools/set-schedule-active/",
+            json={"flow_name": flow_name, "is_schedule_active": active},
+            headers={"Authorization": f"Bearer {_prefect_key()}"},
+            timeout=60,
+        )
+    except Exception as e:  # surface any network error as a dict, never raise
+        return {"error": str(e)}
+
+    if r.status_code == 404:
+        return {
+            "error": (
+                f"Unknown flow {flow_name!r} on {env}. Deployments are registered "
+                "by the backend sync that CI runs after each deploy to main; a "
+                "flow that has never been deployed to the prod pool will not be "
+                "there yet."
+            )
+        }
+    if not r.ok:
+        return {"error": f"HTTP {r.status_code}: {r.text[:300]}"}
+    return r.json()
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
