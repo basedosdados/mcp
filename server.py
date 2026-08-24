@@ -903,6 +903,7 @@ def create_update_table(
     description_es: str = "",
     raw_data_source_ids: list[str] | None = None,
     is_directory: bool = False,
+    auxiliary_files_url: str = "",
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
@@ -915,6 +916,11 @@ def create_update_table(
             the table's columns to be selectable as a directory_primary_key
             target. Only sent when True, so it never accidentally clears the
             flag on a normal update.
+        auxiliary_files_url: public URL of the table's auxiliary-file bundle,
+            conventionally
+            https://storage.googleapis.com/basedosdados/auxiliary_files/<gcp_dataset_id>/<table_slug>/auxiliary_files.zip
+            Only sent when non-empty, so an update that omits it leaves any
+            existing value alone.
 
     Returns: {"id": str, "slug": str}
     """
@@ -939,6 +945,8 @@ def create_update_table(
         fields["rawDataSource"] = raw_data_source_ids
     if is_directory:
         fields["isDirectory"] = is_directory
+    if auxiliary_files_url:
+        fields["auxiliaryFilesUrl"] = auxiliary_files_url
     if id:
         fields["id"] = id
 
@@ -2876,9 +2884,11 @@ def set_deployment_schedule_active(
     also of the BigQuery Row Access Policies. Watch that run.
 
     Args:
-        flow_name: Deployment name as Prefect knows it, usually
-            '<dataset>/<dataset>_flow' — the same string shown in the Django
-            admin's `flow_name` column.
+        flow_name: Prefect's **bare deployment name**, e.g.
+            'au_rba_statistical_tables_flow' — not '<flow>/<deployment>'. The
+            backend stores whatever `/deployments/filter` returns as `name`,
+            which is the same string shown in the Django admin's `flow_name`
+            column.
         active: True to arm (unpause), False to disarm (pause). Disarming is the
             kill switch for a misbehaving pipeline.
         env: Backend to target: 'prod' (default), 'staging', 'dev' or 'local'.
@@ -2903,18 +2913,36 @@ def set_deployment_schedule_active(
     except Exception as e:  # surface any network error as a dict, never raise
         return {"error": str(e)}
 
+    try:
+        body = r.json()
+    except ValueError:
+        # Django's own HTML error page rather than this view's JSON, so the
+        # route is not there. Worth distinguishing: read as "unknown flow", a
+        # missing *route* looks like a missing DisabledFlowSchedule row, which
+        # is a different and far more alarming diagnosis — it would imply an
+        # armed pipeline is about to be re-paused by the next backend sync.
+        return {
+            "error": (
+                f"HTTP {r.status_code} from {base}/admin-tools/set-schedule-active/ "
+                "with a non-JSON body: the endpoint is not deployed on this backend. "
+                "It ships in basedosdados/backend#1060. This says nothing about "
+                "whether the flow is armed — read `paused` on the Prefect deployment."
+            )
+        }
+
     if r.status_code == 404:
         return {
             "error": (
-                f"Unknown flow {flow_name!r} on {env}. Deployments are registered "
-                "by the backend sync that CI runs after each deploy to main; a "
-                "flow that has never been deployed to the prod pool will not be "
-                "there yet."
+                f"Unknown flow {flow_name!r} on {env}: no DisabledFlowSchedule row. "
+                "Check the name is Prefect's bare deployment name (e.g. "
+                "'au_rba_statistical_tables_flow', not '<flow>/<deployment>'). Rows "
+                "are created by the backend sync that CI runs after each deploy to "
+                "main."
             )
         }
     if not r.ok:
-        return {"error": f"HTTP {r.status_code}: {r.text[:300]}"}
-    return r.json()
+        return {"error": f"HTTP {r.status_code}: {json.dumps(body)[:300]}"}
+    return body
 
 
 # ---------------------------------------------------------------------------
