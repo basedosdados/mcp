@@ -4,7 +4,7 @@ from typing import Any
 
 import requests
 
-from .._app import mcp
+from .._app import URLS, mcp
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +212,93 @@ def get_failed_flow_runs(
         )
         result.append({**run, "logs": logs})
     return result
+
+
+@mcp.tool()
+def set_deployment_schedule_active(
+    flow_name: str,
+    active: bool,
+    env: str = "prod",
+) -> dict:
+    """Arm or disarm a deployment's schedule (the API equivalent of the admin tick).
+
+    A merge to main deploys a flow **paused**, and the backend registers it with
+    `is_schedule_active=False`. Arming means three things together: update that
+    stored flag, stamp `reactivated_at`, and unpause the deployment in Prefect 3.
+    This calls `POST /admin-tools/set-schedule-active/`, which does all three.
+
+    Do not reach for the Prefect API directly to unpause. `sync-deployments` —
+    which CI runs on every merge to main — re-enforces the stored
+    `is_schedule_active` state, so a Prefect-only unpause looks armed and then
+    silently re-pauses at the next unrelated merge.
+
+    Setting the state a flow is already in is a safe no-op (`action="no_change"`)
+    and never touches Prefect, so it doubles as a way to read the current state.
+
+    Before arming a pipeline for the first time, know what the first run does: it
+    is the first-ever execution of the prod upload, and for a `part_bdpro` table
+    also of the BigQuery Row Access Policies. Watch that run.
+
+    Args:
+        flow_name: Prefect's **bare deployment name**, e.g.
+            'au_rba_statistical_tables_flow' — not '<flow>/<deployment>'. The
+            backend stores whatever `/deployments/filter` returns as `name`,
+            which is the same string shown in the Django admin's `flow_name`
+            column.
+        active: True to arm (unpause), False to disarm (pause). Disarming is the
+            kill switch for a misbehaving pipeline.
+        env: Backend to target: 'prod' (default), 'staging', 'dev' or 'local'.
+
+    Returns:
+        On success, a dict with 'flow_name', 'deployment_id',
+        'is_schedule_active', 'reactivated_at' and 'action' (one of 'activated',
+        'disabled', 'no_change').
+        On failure, a dict with an 'error' key describing the problem.
+    """
+    base = URLS.get(env)
+    if base is None:
+        return {"error": f"unknown env {env!r}; use one of {sorted(URLS)}"}
+
+    try:
+        r = requests.post(
+            f"{base}/admin-tools/set-schedule-active/",
+            json={"flow_name": flow_name, "is_schedule_active": active},
+            headers={"Authorization": f"Bearer {_prefect_key()}"},
+            timeout=60,
+        )
+    except Exception as e:  # surface any network error as a dict, never raise
+        return {"error": str(e)}
+
+    try:
+        body = r.json()
+    except ValueError:
+        # Django's own HTML error page rather than this view's JSON, so the
+        # route is not there. Worth distinguishing: read as "unknown flow", a
+        # missing *route* looks like a missing DisabledFlowSchedule row, which
+        # is a different and far more alarming diagnosis — it would imply an
+        # armed pipeline is about to be re-paused by the next backend sync.
+        return {
+            "error": (
+                f"HTTP {r.status_code} from {base}/admin-tools/set-schedule-active/ "
+                "with a non-JSON body: the endpoint is not deployed on this backend. "
+                "It ships in basedosdados/backend#1060. This says nothing about "
+                "whether the flow is armed — read `paused` on the Prefect deployment."
+            )
+        }
+
+    if r.status_code == 404:
+        return {
+            "error": (
+                f"Unknown flow {flow_name!r} on {env}: no DisabledFlowSchedule row. "
+                "Check the name is Prefect's bare deployment name (e.g. "
+                "'au_rba_statistical_tables_flow', not '<flow>/<deployment>'). Rows "
+                "are created by the backend sync that CI runs after each deploy to "
+                "main."
+            )
+        }
+    if not r.ok:
+        return {"error": f"HTTP {r.status_code}: {json.dumps(body)[:300]}"}
+    return body
 
 
 # ---------------------------------------------------------------------------
