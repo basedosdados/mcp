@@ -1,0 +1,11 @@
+[project]
+name = "databasis-mcp"
+version = "0.1.0"
+description = "MCP server for Base dos Dados backend API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0",
+    "google-cloud-bigquery>=3.41.0",
+    "requests>=2.31",
+]
