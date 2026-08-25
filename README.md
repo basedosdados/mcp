@@ -170,8 +170,10 @@ Cada ferramenta de cadastro aceita um parâmetro `env`:
 
 ## Instalação
 
+Requer [`uv`](https://docs.astral.sh/uv/).
+
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ---
