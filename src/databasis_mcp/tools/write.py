@@ -228,6 +228,7 @@ def create_update_table(
     description_es: str = "",
     raw_data_source_ids: list[str] | None = None,
     is_directory: bool = False,
+    auxiliary_files_url: str = "",
     id: str | None = None,
     env: str = "dev",
 ) -> dict:
@@ -240,6 +241,11 @@ def create_update_table(
             the table's columns to be selectable as a directory_primary_key
             target. Only sent when True, so it never accidentally clears the
             flag on a normal update.
+        auxiliary_files_url: public URL of the table's auxiliary-file bundle,
+            conventionally
+            https://storage.googleapis.com/basedosdados/auxiliary_files/<gcp_dataset_id>/<table_slug>/auxiliary_files.zip
+            Only sent when non-empty, so an update that omits it leaves any
+            existing value alone.
 
     Returns: {"id": str, "slug": str}
     """
@@ -264,6 +270,8 @@ def create_update_table(
         fields["rawDataSource"] = raw_data_source_ids
     if is_directory:
         fields["isDirectory"] = is_directory
+    if auxiliary_files_url:
+        fields["auxiliaryFilesUrl"] = auxiliary_files_url
     if id:
         fields["id"] = id
 
