@@ -1025,7 +1025,13 @@ def upload_columns_from_sheet(
 
     The sheet must be shared as "Anyone with link can view". Expected columns:
       name, bigquery_type, description, temporal_coverage, covered_by_dictionary,
-      directory_column, measurement_unit, has_sensitive_data, observations
+      directory_column, measurement_unit, has_sensitive_data, observations,
+      observations_en, observations_es
+
+    `observations` is per-language, like `description`. A bare `observations`
+    column is written to observationsPt; add `observations_en` and
+    `observations_es` columns to fill the other two, or the note is blank for
+    two thirds of the site's readers.
 
     NOTE: the sheet's bare `description` column is written to descriptionPt.
     For an English-source sheet that leaves descriptionEn NULL — use
@@ -1116,9 +1122,15 @@ def upload_columns_from_sheet(
         hsd = row.get("has_sensitive_data", "no").strip().lower()
         fields["containsSensitiveData"] = hsd in ("yes", "true", "1")
 
-        obs = row.get("observations", "").strip()
-        if obs:
-            fields["observations"] = obs
+        obs_pt = (row.get("observations_pt") or row.get("observations") or "").strip()
+        if obs_pt:
+            fields["observationsPt"] = obs_pt
+        obs_en = (row.get("observations_en") or "").strip()
+        if obs_en:
+            fields["observationsEn"] = obs_en
+        obs_es = (row.get("observations_es") or "").strip()
+        if obs_es:
+            fields["observationsEs"] = obs_es
 
         if name in ol_map:
             fields["observationLevel"] = ol_map[name]
@@ -1244,18 +1256,26 @@ def bulk_upsert_columns(
     Provide EXACTLY ONE source:
       - architecture_url: a public Google Sheet (same format as
         upload_columns_from_sheet) plus OPTIONAL `description_pt`,
-        `description_en`, `description_es` columns. A bare `description` column
-        is used as Portuguese when `description_pt` is absent.
+        `description_en`, `description_es`, `observations_pt`,
+        `observations_en`, `observations_es` columns. A bare `description` or
+        `observations` column is used as Portuguese when the `_pt` variant is
+        absent.
       - columns_json: a JSON list of column dicts, e.g.
         '[{"name": "age", "description_pt": "Idade", "description_en": "Age",
            "description_es": "Edad", "covered_by_dictionary": true,
            "directory_column": "br_bd_diretorios_mundo.pais:sigla_iso3",
            "measurement_unit": "year", "has_sensitive_data": false,
-           "observations": "Top-coded at 90 from 2011 on.",
+           "observations_pt": "Topo codificado em 90 a partir de 2011.",
+           "observations_en": "Top-coded at 90 from 2011 on.",
+           "observations_es": "Tope codificado en 90 a partir de 2011.",
            "bigquery_type": "INT64"}]'
 
     `observations` is the column's free-text notes field (source quirks,
-    caveats) — a single field, not per-language.
+    caveats). It is per-language like `description`: `observations_pt`,
+    `observations_en`, `observations_es`. A bare `observations` key is used as
+    Portuguese when `observations_pt` is absent, so existing callers keep
+    working — but they leave EN and ES blank, which is how 3,022 production
+    columns ended up PT-only. Pass all three.
 
     Only fields present (non-empty) for a row are written; omitted fields are
     left untouched — no accidental blanking, and partition/primary-key flags are
@@ -1380,10 +1400,18 @@ def bulk_upsert_columns(
             fields["containsSensitiveData"] = hsd
             set_fields.append("containsSensitiveData")
 
-        obs = _get(row, "observations")
-        if obs:
-            fields["observations"] = obs
-            set_fields.append("observations")
+        obs_pt = _get(row, "observations_pt", "observations")
+        if obs_pt:
+            fields["observationsPt"] = obs_pt
+            set_fields.append("observationsPt")
+        obs_en = _get(row, "observations_en")
+        if obs_en:
+            fields["observationsEn"] = obs_en
+            set_fields.append("observationsEn")
+        obs_es = _get(row, "observations_es")
+        if obs_es:
+            fields["observationsEs"] = obs_es
+            set_fields.append("observationsEs")
 
         dir_col = _get(row, "directory_column")
         if dir_col:
@@ -1509,6 +1537,9 @@ def update_column(
     covered_by_dictionary: bool = False,
     directory_column_name: str = "",
     observations: str = "",
+    observations_pt: str = "",
+    observations_en: str = "",
+    observations_es: str = "",
     env: str = "dev",
 ) -> dict:
     """
@@ -1529,7 +1560,12 @@ def update_column(
         directory_column_name: BD directories FK (e.g. "br_bd_diretorios_brasil.municipio:id_municipio")
         observations: free-text notes on the column (the architecture sheet's
             `observations` column) — caveats, source quirks, coverage notes.
-            Single field, not per-language. Empty leaves the stored value alone.
+            Written as Portuguese; an alias for observations_pt, kept for
+            existing callers. Empty leaves the stored value alone.
+        observations_pt/en/es: the same notes in each language. Like the
+            description fields, these are three separate columns on the
+            backend, and a language left empty is blank on the site for those
+            readers — pass all three whenever the column has notes.
         env: "dev" or "prod"
 
     Returns: {"id": str, "name": str}
@@ -1561,8 +1597,12 @@ def update_column(
         fields["containsSensitiveData"] = has_sensitive_data
     if covered_by_dictionary:
         fields["coveredByDictionary"] = covered_by_dictionary
-    if observations:
-        fields["observations"] = observations
+    if observations_pt or observations:
+        fields["observationsPt"] = observations_pt or observations
+    if observations_en:
+        fields["observationsEn"] = observations_en
+    if observations_es:
+        fields["observationsEs"] = observations_es
     # Resolve the BD directories FK (e.g. "br_bd_diretorios_us.state:id_state")
     # to the target column node id and set it. The backend only accepts a target
     # whose column is is_primary_key=True and whose table is is_directory=True
