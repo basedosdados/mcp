@@ -1,11 +1,11 @@
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import requests
 
 from .._app import URLS, mcp
-
 
 # ---------------------------------------------------------------------------
 # Prefect helpers
@@ -16,7 +16,13 @@ from .._app import URLS, mcp
 # separately.
 PREFECT_URL = "https://prefect3.basedosdados.org/api"
 
-_LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40, "CRITICAL": 50}
+_LOG_LEVELS = {
+    "DEBUG": 10,
+    "INFO": 20,
+    "WARNING": 30,
+    "ERROR": 40,
+    "CRITICAL": 50,
+}
 
 
 def _prefect_key() -> str:
@@ -258,13 +264,17 @@ def run_deployment(
     flow_name, deploy_name = parts
 
     try:
-        deployment = _prefect_get(f"/deployments/name/{flow_name}/{deploy_name}")
+        deployment = _prefect_get(
+            f"/deployments/name/{flow_name}/{deploy_name}"
+        )
         deployment_id = deployment["id"]
         run = _prefect_post(
             f"/deployments/{deployment_id}/create_flow_run",
             {"parameters": parameters or {}},
         )
-    except Exception as e:  # surface any HTTP/network error as a dict, never raise
+    except (
+        Exception
+    ) as e:  # surface any HTTP/network error as a dict, never raise
         return {"error": str(e)}
 
     flow_run_id = run.get("id")
@@ -367,27 +377,10 @@ def set_deployment_schedule_active(
 # Prefect trigger
 # ---------------------------------------------------------------------------
 
+# Registered by basedosdados/pipelines (deploy_flows.py) as
+# "<@flow name>/<python identifier>".
 DBT_FLOW_NAME = "BD template: Executa DBT model"
-DBT_FLOW_PROJECT = "main"
-
-
-def _prefect_get_flow(flow_name: str, project: str) -> dict:
-    q = """
-    query($name: String!, $project: String!) {
-        flow(
-            where: {name: {_eq: $name}, project: {name: {_eq: $project}}},
-            order_by: {created: desc},
-            limit: 1
-        ) {
-            id
-            run_config
-        }
-    }
-    """
-    flows = _prefect_gql(q, {"name": flow_name, "project": project})["flow"]
-    if not flows:
-        raise RuntimeError(f"Flow {flow_name!r} not found in project {project!r}")
-    return flows[0]
+DBT_DEPLOYMENT_NAME = "run_dbt_model_flow"
 
 
 @mcp.tool()
@@ -402,14 +395,14 @@ def trigger_dbt_model(
     image: str | None = None,
 ) -> dict:
     """
-    Trigger a Prefect flow run for 'BD template: Executa DBT model' (project: main).
+    Trigger a Prefect 3 flow run of 'BD template: Executa DBT model/run_dbt_model_flow'.
 
     Args:
         dataset_id: GCP dataset ID, e.g. "br_ibge_censo_demografico"
         target: dbt target — "dev" or "prod" (required)
         table_id: GCP table ID, e.g. "microdados_domicilio_2010". None runs all tables in the dataset.
-        dbt_command: dbt command to run (default: "run"). Use "run --full-refresh" to force rebuild.
-        flags: extra dbt flags string, e.g. "--full-refresh"
+        dbt_command: "run" (default), "test", or "run and test".
+        flags: extra dbt flags string, e.g. "--full-refresh" to force a rebuild
         dbt_alias: whether dbt uses alias (default True)
         download_csv_file: whether to download CSV after run (default False)
         image: optional Docker image override, e.g. "ghcr.io/basedosdados/prefect-flows:sha"
@@ -420,39 +413,30 @@ def trigger_dbt_model(
     if target not in ("dev", "prod"):
         raise ValueError(f"target must be 'dev' or 'prod', got {target!r}")
 
-    flow = _prefect_get_flow(DBT_FLOW_NAME, DBT_FLOW_PROJECT)
-    flow_id = flow["id"]
-
-    # Use the flow's run_config (preserving existing fields), override labels and optionally image
-    label = "basedosdados" if target == "prod" else "basedosdados-dev"
-    run_config = {**(flow["run_config"] or {}), "labels": [label]}
-    if image is not None:
-        run_config["image"] = image
+    deployment = _prefect_get(
+        f"/deployments/name/{quote(DBT_FLOW_NAME, safe='')}/{DBT_DEPLOYMENT_NAME}"
+    )
 
     parameters: dict = {
         "dataset_id": dataset_id,
+        "table_id": table_id,
         "dbt_command": dbt_command,
         "dbt_alias": dbt_alias,
         "download_csv_file": download_csv_file,
         "target": target,
-        "_vars": None,
         "flags": flags,
     }
-    if table_id is not None:
-        parameters["table_id"] = table_id
+    body: dict = {"parameters": parameters}
+    if image is not None:
+        body["job_variables"] = {"image": image}
 
-    mutation = """
-    mutation($input: create_flow_run_input!) {
-        create_flow_run(input: $input) {
-            id
-        }
-    }
-    """
-    result = _prefect_gql(mutation, {"input": {"flow_id": flow_id, "parameters": parameters, "run_config": run_config}})
-    flow_run_id = result["create_flow_run"]["id"]
+    run = _prefect_post(
+        f"/deployments/{deployment['id']}/create_flow_run", body
+    )
+    flow_run_id = run["id"]
     return {
         "flow_run_id": flow_run_id,
         "dataset_id": dataset_id,
         "table_id": table_id,
-        "prefect_url": f"https://prefect.basedosdados.org/flow-run/{flow_run_id}",
+        "prefect_url": f"https://prefect3.basedosdados.org/v2/runs/flow-run/{flow_run_id}",
     }

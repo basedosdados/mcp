@@ -2,12 +2,10 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any
 
 from .._app import mcp
 from ..gql import _gql, _strip_id
 from .write import update_column
-
 
 # ---------------------------------------------------------------------------
 # BigQuery helpers
@@ -16,7 +14,9 @@ from .write import update_column
 
 def _get_bq_client(billing_project: str | None = None):
     """Return a BigQuery client, resolving billing project from arg → env var → credentials file."""
-    from google.cloud import bigquery  # deferred import: only needed for BQ tools
+    from google.cloud import (
+        bigquery,
+    )  # deferred import: only needed for BQ tools
 
     project = billing_project or os.environ.get("GCP_PROJECT_ID")
     if not project:
@@ -38,7 +38,7 @@ def _bq_row_to_dict(row) -> dict:
     from datetime import date, datetime
     from decimal import Decimal
 
-    result = {}
+    result: dict = {}
     for key, value in row.items():
         if isinstance(value, (datetime, date)):
             result[key] = value.isoformat()
@@ -104,11 +104,15 @@ def preview_table(
             table_node = te["node"]
             break
     if table_node is None:
-        raise RuntimeError(f"Tabela {table_slug!r} não encontrada no dataset {dataset_slug!r}")
+        raise RuntimeError(
+            f"Tabela {table_slug!r} não encontrada no dataset {dataset_slug!r}"
+        )
 
     ct_edges = table_node["cloudTables"]["edges"]
     if not ct_edges:
-        raise RuntimeError(f"Tabela {table_slug!r} não possui referência BigQuery registrada")
+        raise RuntimeError(
+            f"Tabela {table_slug!r} não possui referência BigQuery registrada"
+        )
 
     ct = ct_edges[0]["node"]
     bq_table = f"{ct['gcpProjectId']}.{ct['gcpDatasetId']}.{ct['gcpTableId']}"
@@ -171,6 +175,7 @@ def query_bigquery(
 # Partition / cluster metadata audit
 # ---------------------------------------------------------------------------
 
+
 def _parse_sql_partitions(pipelines_path: str) -> dict[str, list[str]]:
     """
     Walk dbt SQL models and extract partition + cluster columns per table.
@@ -189,14 +194,20 @@ def _parse_sql_partitions(pipelines_path: str) -> dict[str, list[str]]:
 
             fpath = os.path.join(root, fname)
             try:
-                content = Path(fpath).read_text(encoding="utf-8", errors="ignore")
+                content = Path(fpath).read_text(
+                    encoding="utf-8", errors="ignore"
+                )
             except OSError:
                 continue
 
             # Extract the config(...) block (may span multiple lines)
-            config_match = re.search(r"config\s*\((.+?)\)\s*\}", content, re.DOTALL)
+            config_match = re.search(
+                r"config\s*\((.+?)\)\s*\}", content, re.DOTALL
+            )
             if not config_match:
-                config_match = re.search(r"config\s*\((.+?)\)", content, re.DOTALL)
+                config_match = re.search(
+                    r"config\s*\((.+?)\)", content, re.DOTALL
+                )
             if not config_match:
                 continue
             cfg = config_match.group(0)
@@ -221,7 +232,9 @@ def _parse_sql_partitions(pipelines_path: str) -> dict[str, list[str]]:
                 partition_cols.add(pf_m.group(1))
 
             # cluster_by="col" or cluster_by=["col1", "col2"]
-            cb_m = re.search(r'cluster_by\s*=\s*(\[.*?\]|"[^"]*")', cfg, re.DOTALL)
+            cb_m = re.search(
+                r'cluster_by\s*=\s*(\[.*?\]|"[^"]*")', cfg, re.DOTALL
+            )
             if cb_m:
                 val = cb_m.group(1).strip()
                 if val.startswith("["):
@@ -356,7 +369,9 @@ def _write_partition_report(
     # Group by dataset → table
     grouped: dict[str, dict[str, list[dict]]] = {}
     for c in changes:
-        grouped.setdefault(c["dataset"], {}).setdefault(c["table"], []).append(c)
+        grouped.setdefault(c["dataset"], {}).setdefault(c["table"], []).append(
+            c
+        )
 
     for ds_slug, tables in sorted(grouped.items()):
         lines.append(f"\n## {ds_slug}")
@@ -370,19 +385,23 @@ def _write_partition_report(
             lines.append("|--------|-------|--------|--------|")
             for c in cols:
                 before = "True" if c["before"] else "False"
-                after  = "True" if c["after"] else "False"
-                error  = f" ⚠️ {c['error']}" if c.get("error") else ""
-                lines.append(f"| {c['column_name']} | {before} | {after} | {c['reason']}{error} |")
+                after = "True" if c["after"] else "False"
+                error = f" ⚠️ {c['error']}" if c.get("error") else ""
+                lines.append(
+                    f"| {c['column_name']} | {before} | {after} | {c['reason']}{error} |"
+                )
 
     if bq_validation:
         lines.append("\n---\n")
-        lines.append("# Validação BigQuery (4 fontes: SQL · BQ dev · BQ prod · API)")
+        lines.append(
+            "# Validação BigQuery (4 fontes: SQL · BQ dev · BQ prod · API)"
+        )
 
-        sql_dev  = bq_validation.get("sql_dev_mismatches", [])
+        sql_dev = bq_validation.get("sql_dev_mismatches", [])
         sql_prod = bq_validation.get("sql_prod_mismatches", [])
         dev_prod = bq_validation.get("dev_prod_mismatches", [])
-        bq_api   = bq_validation.get("bq_api_mismatches", [])
-        dev_inacc  = bq_validation.get("bq_dev_inaccessible", [])
+        bq_api = bq_validation.get("bq_api_mismatches", [])
+        dev_inacc = bq_validation.get("bq_dev_inaccessible", [])
         prod_inacc = bq_validation.get("bq_prod_inaccessible", [])
 
         ok_tables = bq_validation.get("tables_ok", 0)
@@ -408,7 +427,9 @@ def _write_partition_report(
 
         if sql_dev:
             lines.append("\n## Divergências SQL ↔ BQ dev")
-            lines.append("| Dataset.Tabela | Coluna | No SQL | No BQ dev | Nota |")
+            lines.append(
+                "| Dataset.Tabela | Coluna | No SQL | No BQ dev | Nota |"
+            )
             lines.append("|---|---|:---:|:---:|---|")
             for m in sorted(sql_dev, key=lambda x: (x["gcp_key"], x["column"])):
                 lines.append(
@@ -420,9 +441,13 @@ def _write_partition_report(
 
         if sql_prod:
             lines.append("\n## Divergências SQL ↔ BQ prod")
-            lines.append("| Dataset.Tabela | Coluna | No SQL | No BQ prod | Nota |")
+            lines.append(
+                "| Dataset.Tabela | Coluna | No SQL | No BQ prod | Nota |"
+            )
             lines.append("|---|---|:---:|:---:|---|")
-            for m in sorted(sql_prod, key=lambda x: (x["gcp_key"], x["column"])):
+            for m in sorted(
+                sql_prod, key=lambda x: (x["gcp_key"], x["column"])
+            ):
                 lines.append(
                     f"| `{m['gcp_key']}` | {m['column']} "
                     f"| {'✓' if m['in_sql'] else '✗'} "
@@ -432,9 +457,13 @@ def _write_partition_report(
 
         if dev_prod:
             lines.append("\n## Divergências BQ dev ↔ BQ prod")
-            lines.append("| Dataset.Tabela | Coluna | No BQ dev | No BQ prod | Nota |")
+            lines.append(
+                "| Dataset.Tabela | Coluna | No BQ dev | No BQ prod | Nota |"
+            )
             lines.append("|---|---|:---:|:---:|---|")
-            for m in sorted(dev_prod, key=lambda x: (x["gcp_key"], x["column"])):
+            for m in sorted(
+                dev_prod, key=lambda x: (x["gcp_key"], x["column"])
+            ):
                 lines.append(
                     f"| `{m['gcp_key']}` | {m['column']} "
                     f"| {'✓' if m['in_bq_dev'] else '✗'} "
@@ -444,7 +473,9 @@ def _write_partition_report(
 
         if bq_api:
             lines.append("\n## Divergências BQ prod ↔ API")
-            lines.append("| Dataset.Tabela | Coluna | No BQ prod | Na API | Nota |")
+            lines.append(
+                "| Dataset.Tabela | Coluna | No BQ prod | Na API | Nota |"
+            )
             lines.append("|---|---|:---:|:---:|---|")
             for m in sorted(bq_api, key=lambda x: (x["gcp_key"], x["column"])):
                 lines.append(
@@ -490,7 +521,11 @@ def _bq_get_partition_map(
                 key = f"{ds_id}.{row['table_name']}"
                 p = row["partition_col"]
                 c_str = row["cluster_cols"] or ""
-                c_set = {c.strip() for c in c_str.split(",") if c.strip()} if c_str else set()
+                c_set = (
+                    {c.strip() for c in c_str.split(",") if c.strip()}
+                    if c_str
+                    else set()
+                )
                 bq_map[key] = {
                     "partition_col": p,
                     "cluster_cols": c_set,
@@ -567,7 +602,9 @@ def audit_partition_metadata(
         table_triples = _get_all_tables_for_audit(env=env)
     else:
         gcp_dataset_ids = (
-            gcp_dataset_id if isinstance(gcp_dataset_id, list) else [gcp_dataset_id]
+            gcp_dataset_id
+            if isinstance(gcp_dataset_id, list)
+            else [gcp_dataset_id]
         )
         table_triples = []
         for ds_id in gcp_dataset_ids:
@@ -601,12 +638,17 @@ def audit_partition_metadata(
         partition_cols = set(sql_map[gcp_key])
 
         if validate_bq:
-            _checked_tables.append({
-                "gcp_key": gcp_key,
-                "gcp_dataset_id": ct["gcp_dataset_id"],
-                "api_cols": {col["name"]: col["is_partition"] for col in tdata["columns"]},
-                "sql_cols": partition_cols,
-            })
+            _checked_tables.append(
+                {
+                    "gcp_key": gcp_key,
+                    "gcp_dataset_id": ct["gcp_dataset_id"],
+                    "api_cols": {
+                        col["name"]: col["is_partition"]
+                        for col in tdata["columns"]
+                    },
+                    "sql_cols": partition_cols,
+                }
+            )
 
         for col in tdata["columns"]:
             columns_checked += 1
@@ -622,9 +664,14 @@ def audit_partition_metadata(
                 }
                 false_positives.append(entry)
                 change = {
-                    "dataset": ds_id, "table": tslug, "gcp_key": gcp_key,
-                    "column_id": col["id"], "column_name": col["name"],
-                    "before": True, "after": False, "reason": "não está no SQL",
+                    "dataset": ds_id,
+                    "table": tslug,
+                    "gcp_key": gcp_key,
+                    "column_id": col["id"],
+                    "column_name": col["name"],
+                    "before": True,
+                    "after": False,
+                    "reason": "não está no SQL",
                 }
                 if fix:
                     try:
@@ -651,9 +698,14 @@ def audit_partition_metadata(
                 }
                 missing.append(entry)
                 change = {
-                    "dataset": ds_id, "table": tslug, "gcp_key": gcp_key,
-                    "column_id": col["id"], "column_name": col["name"],
-                    "before": False, "after": True, "reason": "partition/cluster no SQL",
+                    "dataset": ds_id,
+                    "table": tslug,
+                    "gcp_key": gcp_key,
+                    "column_id": col["id"],
+                    "column_name": col["name"],
+                    "before": False,
+                    "after": True,
+                    "reason": "partition/cluster no SQL",
                 }
                 if fix:
                     try:
@@ -706,65 +758,93 @@ def audit_partition_metadata(
 
             # SQL ↔ BQ dev
             for col in sql_cols - dev_cols:
-                sql_dev_mismatches.append({
-                    "gcp_key": gcp_key, "column": col,
-                    "in_sql": True, "in_bq_dev": False,
-                    "note": "SQL define mas BQ dev não tem",
-                })
+                sql_dev_mismatches.append(
+                    {
+                        "gcp_key": gcp_key,
+                        "column": col,
+                        "in_sql": True,
+                        "in_bq_dev": False,
+                        "note": "SQL define mas BQ dev não tem",
+                    }
+                )
                 table_ok = False
             for col in dev_cols - sql_cols:
-                sql_dev_mismatches.append({
-                    "gcp_key": gcp_key, "column": col,
-                    "in_sql": False, "in_bq_dev": True,
-                    "note": "BQ dev tem mas SQL não define",
-                })
+                sql_dev_mismatches.append(
+                    {
+                        "gcp_key": gcp_key,
+                        "column": col,
+                        "in_sql": False,
+                        "in_bq_dev": True,
+                        "note": "BQ dev tem mas SQL não define",
+                    }
+                )
                 table_ok = False
 
             # SQL ↔ BQ prod
             for col in sql_cols - prod_cols:
-                sql_prod_mismatches.append({
-                    "gcp_key": gcp_key, "column": col,
-                    "in_sql": True, "in_bq_prod": False,
-                    "note": "SQL define mas BQ prod não tem",
-                })
+                sql_prod_mismatches.append(
+                    {
+                        "gcp_key": gcp_key,
+                        "column": col,
+                        "in_sql": True,
+                        "in_bq_prod": False,
+                        "note": "SQL define mas BQ prod não tem",
+                    }
+                )
                 table_ok = False
             for col in prod_cols - sql_cols:
-                sql_prod_mismatches.append({
-                    "gcp_key": gcp_key, "column": col,
-                    "in_sql": False, "in_bq_prod": True,
-                    "note": "BQ prod tem mas SQL não define",
-                })
+                sql_prod_mismatches.append(
+                    {
+                        "gcp_key": gcp_key,
+                        "column": col,
+                        "in_sql": False,
+                        "in_bq_prod": True,
+                        "note": "BQ prod tem mas SQL não define",
+                    }
+                )
                 table_ok = False
 
             # BQ dev ↔ BQ prod
             for col in dev_cols - prod_cols:
-                dev_prod_mismatches.append({
-                    "gcp_key": gcp_key, "column": col,
-                    "in_bq_dev": True, "in_bq_prod": False,
-                    "note": "BQ dev tem mas BQ prod não tem",
-                })
+                dev_prod_mismatches.append(
+                    {
+                        "gcp_key": gcp_key,
+                        "column": col,
+                        "in_bq_dev": True,
+                        "in_bq_prod": False,
+                        "note": "BQ dev tem mas BQ prod não tem",
+                    }
+                )
                 table_ok = False
             for col in prod_cols - dev_cols:
-                dev_prod_mismatches.append({
-                    "gcp_key": gcp_key, "column": col,
-                    "in_bq_dev": False, "in_bq_prod": True,
-                    "note": "BQ prod tem mas BQ dev não tem",
-                })
+                dev_prod_mismatches.append(
+                    {
+                        "gcp_key": gcp_key,
+                        "column": col,
+                        "in_bq_dev": False,
+                        "in_bq_prod": True,
+                        "note": "BQ prod tem mas BQ dev não tem",
+                    }
+                )
                 table_ok = False
 
             # BQ prod ↔ API
             for col_name, is_partition_api in api_cols.items():
                 in_bq_prod = col_name in prod_cols
                 if is_partition_api != in_bq_prod:
-                    bq_api_mismatches.append({
-                        "gcp_key": gcp_key, "column": col_name,
-                        "in_bq_prod": in_bq_prod, "in_api": is_partition_api,
-                        "note": (
-                            "BQ prod tem partition/cluster mas API diz False"
-                            if in_bq_prod else
-                            "API diz True mas BQ prod não tem partition/cluster"
-                        ),
-                    })
+                    bq_api_mismatches.append(
+                        {
+                            "gcp_key": gcp_key,
+                            "column": col_name,
+                            "in_bq_prod": in_bq_prod,
+                            "in_api": is_partition_api,
+                            "note": (
+                                "BQ prod tem partition/cluster mas API diz False"
+                                if in_bq_prod
+                                else "API diz True mas BQ prod não tem partition/cluster"
+                            ),
+                        }
+                    )
                     table_ok = False
 
             if table_ok:
@@ -781,13 +861,17 @@ def audit_partition_metadata(
         }
 
     if report_path and (all_changes or bq_validation):
-        _write_partition_report(report_path, all_changes, stats, fix, env, bq_validation)
+        _write_partition_report(
+            report_path, all_changes, stats, fix, env, bq_validation
+        )
 
     return {
         "false_positives": false_positives,
         "missing": missing,
         "no_sql_file": no_sql_file,
         "stats": stats,
-        "report_path": report_path if (report_path and (all_changes or bq_validation)) else None,
+        "report_path": report_path
+        if (report_path and (all_changes or bq_validation))
+        else None,
         "bq_validation": bq_validation,
     }

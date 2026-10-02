@@ -6,16 +6,22 @@ import requests
 from ._app import URLS
 from .auth import _get_token
 
-
 # ---------------------------------------------------------------------------
 # GraphQL helpers
 # ---------------------------------------------------------------------------
 
 
-def _gql(query: str, variables: dict | None = None, env: str | None = None, auth: bool = True) -> dict:
+def _gql(
+    query: str,
+    variables: dict | None = None,
+    env: str | None = None,
+    auth: bool = True,
+) -> dict:
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
-        raise ValueError(f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}")
+        raise ValueError(
+            f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}"
+        )
     base_url = URLS[env]
     headers: dict[str, str] = {}
     if auth:
@@ -69,15 +75,19 @@ def _lookup_directory_column(directory_column_str: str, env: str) -> str | None:
 
     Format: "<dataset_slug>.<table_slug>:<column_name>"
     """
-    if not directory_column_str or "." not in directory_column_str or ":" not in directory_column_str:
+    if (
+        not directory_column_str
+        or "." not in directory_column_str
+        or ":" not in directory_column_str
+    ):
         return None
     dot_pos = directory_column_str.rfind(".")
     colon_pos = directory_column_str.find(":", dot_pos)
     if colon_pos == -1:
         return None
     dataset_slug = directory_column_str[:dot_pos]
-    table_slug = directory_column_str[dot_pos + 1:colon_pos]
-    column_name = directory_column_str[colon_pos + 1:]
+    table_slug = directory_column_str[dot_pos + 1 : colon_pos]
+    column_name = directory_column_str[colon_pos + 1 :]
 
     gql = """
     query($slug: String!) {
@@ -114,14 +124,16 @@ def _lookup_directory_column(directory_column_str: str, env: str) -> str | None:
     # Retry without common BD prefixes (e.g. "br_bd_" → "") used in dev
     for prefix in ("br_bd_", "br_"):
         if dataset_slug.startswith(prefix):
-            result = _search(dataset_slug[len(prefix):])
+            result = _search(dataset_slug[len(prefix) :])
             if result:
                 return result
 
     return None
 
 
-def _fetch_all(token_env: str, query_name: str, fields: str, auth: bool = True) -> list[dict]:
+def _fetch_all(
+    token_env: str, query_name: str, fields: str, auth: bool = True
+) -> list[dict]:
     nodes: list[dict] = []
     cursor: str | None = None
     while True:

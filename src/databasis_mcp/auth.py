@@ -16,7 +16,7 @@ _cache: dict[str, Any] = {
     "token": None,
     "expires_at": 0.0,
     "env": None,
-    "ids": {},   # {cache_key: (result, fetched_at)}
+    "ids": {},  # {cache_key: (result, fetched_at)}
 }
 _IDS_TTL = 30  # seconds
 
@@ -76,7 +76,9 @@ def _get_token(env: str | None = None) -> tuple[str, str]:
     """
     env = env or os.environ.get("ENV", "dev")
     if env not in URLS:
-        raise ValueError(f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}")
+        raise ValueError(
+            f"env must be 'local', 'dev', 'staging', or 'prod', got: {env!r}"
+        )
 
     base_url = URLS[env]
     creds = _get_credentials(env)

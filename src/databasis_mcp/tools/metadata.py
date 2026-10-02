@@ -6,9 +6,8 @@ from pathlib import Path
 import requests
 
 from .._app import mcp
-from ..auth import _cache, _IDS_TTL, _get_credentials, _get_token
-from ..gql import _gql, _fetch_all, _strip_id
-
+from ..auth import _IDS_TTL, _cache, _get_credentials, _get_token
+from ..gql import _fetch_all, _gql, _strip_id
 
 # ---------------------------------------------------------------------------
 # MCP tools — metadata (read-only)
@@ -30,7 +29,12 @@ def auth(env: str = "dev") -> dict:
         {"authenticated": True, "env": env, "base_url": url}
     """
     token, base_url = _get_token(env)
-    return {"authenticated": True, "env": env, "base_url": base_url, "token_cached": True}
+    return {
+        "authenticated": True,
+        "env": env,
+        "base_url": base_url,
+        "token_cached": True,
+    }
 
 
 @mcp.tool()
@@ -60,8 +64,16 @@ def discover_ids(
     Returns a dict mapping category → {slug: id}.
     """
     _DEFAULT_KEYS = [
-        "status", "bigquery_type", "entity", "license", "availability",
-        "organization", "theme", "tag", "entity_category", "language",
+        "status",
+        "bigquery_type",
+        "entity",
+        "license",
+        "availability",
+        "organization",
+        "theme",
+        "tag",
+        "entity_category",
+        "language",
         "measurement_unit_category",
     ]
     requested = set(keys) if keys else set(_DEFAULT_KEYS)
@@ -83,7 +95,9 @@ def discover_ids(
         for qname in ["allBigquerytype", "allBigQueryType"]:
             try:
                 nodes = _fetch_all(env, qname, "id name", auth=False)
-                result["bigquery_type"] = {n["name"]: _strip_id(n["id"]) for n in nodes}
+                result["bigquery_type"] = {
+                    n["name"]: _strip_id(n["id"]) for n in nodes
+                }
                 break
             except Exception:
                 continue
@@ -116,15 +130,21 @@ def discover_ids(
 
     if "entity_category" in requested:
         nodes = _fetch_all(env, "allEntitycategory", "id slug name", auth=False)
-        result["entity_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+        result["entity_category"] = {
+            n["slug"]: _strip_id(n["id"]) for n in nodes
+        }
 
     if "language" in requested:
         nodes = _fetch_all(env, "allLanguage", "id slug name", auth=False)
         result["language"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
 
     if "measurement_unit_category" in requested:
-        nodes = _fetch_all(env, "allMeasurementunitcategory", "id slug name", auth=False)
-        result["measurement_unit_category"] = {n["slug"]: _strip_id(n["id"]) for n in nodes}
+        nodes = _fetch_all(
+            env, "allMeasurementunitcategory", "id slug name", auth=False
+        )
+        result["measurement_unit_category"] = {
+            n["slug"]: _strip_id(n["id"]) for n in nodes
+        }
 
     if "ids" not in _cache:
         _cache["ids"] = {}
@@ -168,9 +188,11 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
     Returns: {"slug": str, "id": str, "name": str}
     """
     if category not in _CATEGORY_QUERY_MAP:
-        raise ValueError(f"Unknown category {category!r}. Valid: {list(_CATEGORY_QUERY_MAP)}")
+        raise ValueError(
+            f"Unknown category {category!r}. Valid: {list(_CATEGORY_QUERY_MAP)}"
+        )
     query_name, fields = _CATEGORY_QUERY_MAP[category]
-    q = f'query($slug: String!) {{ {query_name}(slug: $slug, first: 1) {{ edges {{ node {{ {fields} }} }} }} }}'
+    q = f"query($slug: String!) {{ {query_name}(slug: $slug, first: 1) {{ edges {{ node {{ {fields} }} }} }} }}"
     data = _gql(q, {"slug": slug}, env=env, auth=False)
     edges = data[query_name]["edges"]
     if not edges:
@@ -201,7 +223,9 @@ def list_datasets(
         # allDataset supports organizations_Id, not organizations_Slug, so
         # resolve the org slug to its id first.
         org_q = "query($slug: String!) { allOrganization(slug: $slug, first: 1) { edges { node { id } } } }"
-        org_edges = _gql(org_q, {"slug": organization_slug}, env=env, auth=False)["allOrganization"]["edges"]
+        org_edges = _gql(
+            org_q, {"slug": organization_slug}, env=env, auth=False
+        )["allOrganization"]["edges"]
         if not org_edges:
             return {"total": 0, "datasets": []}
         org_id = _strip_id(org_edges[0]["node"]["id"])
@@ -322,9 +346,16 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
     gated = """publishedBy(first: 10) { edges { node { id email } } }
                                 dataCleanedBy(first: 10) { edges { node { id email } } }"""
     try:
-        data = _gql(q.replace("__GATED_FIELDS__", gated), {"slug": slug}, env=env)
+        data = _gql(
+            q.replace("__GATED_FIELDS__", gated), {"slug": slug}, env=env
+        )
     except (RuntimeError, requests.RequestException):
-        data = _gql(q.replace("__GATED_FIELDS__", ""), {"slug": slug}, env=env, auth=False)
+        data = _gql(
+            q.replace("__GATED_FIELDS__", ""),
+            {"slug": slug},
+            env=env,
+            auth=False,
+        )
     edges = data["allDataset"]["edges"]
     if not edges:
         return {"found": False, "id": None, "slug": slug, "tables": {}}
@@ -346,8 +377,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "observation_levels": [
                 {
                     "id": _strip_id(ol["node"]["id"]),
-                    "entity_id": _strip_id(ol["node"]["entity"]["id"]) if ol["node"].get("entity") else None,
-                    "entity_slug": ol["node"]["entity"]["slug"] if ol["node"].get("entity") else None,
+                    "entity_id": _strip_id(ol["node"]["entity"]["id"])
+                    if ol["node"].get("entity")
+                    else None,
+                    "entity_slug": ol["node"]["entity"]["slug"]
+                    if ol["node"].get("entity")
+                    else None,
                 }
                 for ol in t["observationLevels"]["edges"]
             ],
@@ -363,8 +398,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "coverages": [
                 {
                     "id": _strip_id(cov["node"]["id"]),
-                    "area_id": _strip_id(cov["node"]["area"]["id"]) if cov["node"].get("area") else None,
-                    "area_slug": cov["node"]["area"]["slug"] if cov["node"].get("area") else None,
+                    "area_id": _strip_id(cov["node"]["area"]["id"])
+                    if cov["node"].get("area")
+                    else None,
+                    "area_slug": cov["node"]["area"]["slug"]
+                    if cov["node"].get("area")
+                    else None,
                     "datetime_ranges": [
                         {
                             "id": _strip_id(dtr["node"]["id"]),
@@ -380,8 +419,12 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             "updates": [
                 {
                     "id": _strip_id(upd["node"]["id"]),
-                    "entity_id": _strip_id(upd["node"]["entity"]["id"]) if upd["node"].get("entity") else None,
-                    "entity_slug": upd["node"]["entity"]["slug"] if upd["node"].get("entity") else None,
+                    "entity_id": _strip_id(upd["node"]["entity"]["id"])
+                    if upd["node"].get("entity")
+                    else None,
+                    "entity_slug": upd["node"]["entity"]["slug"]
+                    if upd["node"].get("entity")
+                    else None,
                 }
                 for upd in t["updates"]["edges"]
             ],
@@ -405,9 +448,18 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         "description_pt": ds.get("descriptionPt"),
         "description_en": ds.get("descriptionEn"),
         "description_es": ds.get("descriptionEs"),
-        "organizations": [{"id": _strip_id(o["node"]["id"]), "slug": o["node"]["slug"]} for o in ds["organizations"]["edges"]],
-        "themes": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["themes"]["edges"]],
-        "tags": [{"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]} for t in ds["tags"]["edges"]],
+        "organizations": [
+            {"id": _strip_id(o["node"]["id"]), "slug": o["node"]["slug"]}
+            for o in ds["organizations"]["edges"]
+        ],
+        "themes": [
+            {"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]}
+            for t in ds["themes"]["edges"]
+        ],
+        "tags": [
+            {"id": _strip_id(t["node"]["id"]), "slug": t["node"]["slug"]}
+            for t in ds["tags"]["edges"]
+        ],
         "tables": tables,
     }
 
@@ -424,7 +476,11 @@ def get_authenticated_account(env: str = "dev") -> dict:
         email = creds[1]
     else:
         creds_path = Path.home() / ".basedosdados" / "credentials.json"
-        env_data = json.loads(creds_path.read_text()).get(env, {}) if creds_path.exists() else {}
+        env_data = (
+            json.loads(creds_path.read_text()).get(env, {})
+            if creds_path.exists()
+            else {}
+        )
         email = os.environ.get("EMAIL") or env_data.get("email")
         if not email:
             raise RuntimeError(
@@ -432,7 +488,7 @@ def get_authenticated_account(env: str = "dev") -> dict:
                 'Add an "email" field next to the token in ~/.basedosdados/credentials.json.'
             )
     data = _gql(
-        'query($email: String!) { allAccount(first: 1, email: $email) { edges { node { id email } } } }',
+        "query($email: String!) { allAccount(first: 1, email: $email) { edges { node { id email } } } }",
         {"email": email},
         env=env,
     )
@@ -482,7 +538,9 @@ def search_datasets(
             "slug": e["node"]["slug"],
             "name_pt": e["node"].get("namePt"),
             "description_pt": e["node"].get("descriptionPt"),
-            "organizations": [o["node"]["slug"] for o in e["node"]["organizations"]["edges"]],
+            "organizations": [
+                o["node"]["slug"] for o in e["node"]["organizations"]["edges"]
+            ],
             "themes": [t["node"]["slug"] for t in e["node"]["themes"]["edges"]],
         }
         for e in result["edges"]

@@ -5,9 +5,8 @@ import requests
 
 from .._app import mcp
 from ..auth import _get_token
-from ..gql import _gql, _mut, _strip_id, _lookup_directory_column
+from ..gql import _gql, _lookup_directory_column, _mut, _strip_id
 from .metadata import discover_ids
-
 
 # ---------------------------------------------------------------------------
 # MCP tools — write (create/update/delete)
@@ -104,7 +103,9 @@ def reorder_observation_levels(
     )
     payload = result["reorderObservationLevels"]
     if not payload["ok"]:
-        raise RuntimeError(f"reorderObservationLevels failed: {payload['errors']}")
+        raise RuntimeError(
+            f"reorderObservationLevels failed: {payload['errors']}"
+        )
     return {"reordered": len(ol_ids)}
 
 
@@ -208,7 +209,9 @@ def create_update_dataset(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateDataset", fields, "dataset { id slug }", env=env)
+    payload = _mut(
+        "CreateUpdateDataset", fields, "dataset { id slug }", env=env
+    )
     ds = payload["dataset"]
     return {"id": _strip_id(ds["id"]), "slug": ds["slug"]}
 
@@ -275,7 +278,9 @@ def create_update_table(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateTable", fields, "table { id slug namePt }", env=env)
+    payload = _mut(
+        "CreateUpdateTable", fields, "table { id slug namePt }", env=env
+    )
     t = payload["table"]
     return {"id": _strip_id(t["id"]), "slug": t["slug"]}
 
@@ -323,7 +328,11 @@ def upload_columns(
         },
         timeout=120,
     )
-    return {"success": resp.ok, "status_code": resp.status_code, "text": resp.text[:500]}
+    return {
+        "success": resp.ok,
+        "status_code": resp.status_code,
+        "text": resp.text[:500],
+    }
 
 
 @mcp.tool()
@@ -370,17 +379,25 @@ def upload_columns_from_sheet(
 
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", architecture_url)
     if not match:
-        raise ValueError(f"Cannot extract sheet ID from URL: {architecture_url}")
+        raise ValueError(
+            f"Cannot extract sheet ID from URL: {architecture_url}"
+        )
     sheet_id = match.group(1)
 
-    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    csv_url = (
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    )
     resp = requests.get(csv_url, timeout=30, allow_redirects=True)
     if not resp.ok:
-        raise RuntimeError(f"Failed to download sheet CSV: HTTP {resp.status_code}")
+        raise RuntimeError(
+            f"Failed to download sheet CSV: HTTP {resp.status_code}"
+        )
 
-    rows = list(csv.DictReader(io.StringIO(resp.content.decode('utf-8'))))
+    rows = list(csv.DictReader(io.StringIO(resp.content.decode("utf-8"))))
 
-    ol_map: dict[str, str] = json.loads(observation_levels) if observation_levels.strip() else {}
+    ol_map: dict[str, str] = (
+        json.loads(observation_levels) if observation_levels.strip() else {}
+    )
 
     ids = discover_ids(env=env, keys=["bigquery_type", "status"])
     bq_type_ids: dict[str, str] = ids.get("bigquery_type", {})
@@ -439,7 +456,9 @@ def upload_columns_from_sheet(
         hsd = row.get("has_sensitive_data", "no").strip().lower()
         fields["containsSensitiveData"] = hsd in ("yes", "true", "1")
 
-        obs_pt = (row.get("observations_pt") or row.get("observations") or "").strip()
+        obs_pt = (
+            row.get("observations_pt") or row.get("observations") or ""
+        ).strip()
         if obs_pt:
             fields["observationsPt"] = obs_pt
         obs_en = (row.get("observations_en") or "").strip()
@@ -467,11 +486,12 @@ def upload_columns_from_sheet(
     auth_header, base_url = _get_token(env)
     variables = {f"input{i}": inp for i, inp in enumerate(column_inputs)}
     aliases = "\n".join(
-        f'  col{i}: CreateUpdateColumn(input: $input{i}) {{ errors {{ field messages }} column {{ id name }} }}'
+        f"  col{i}: CreateUpdateColumn(input: $input{i}) {{ errors {{ field messages }} column {{ id name }} }}"
         for i in range(len(column_inputs))
     )
     var_defs = ", ".join(
-        f"$input{i}: CreateUpdateColumnInput!" for i in range(len(column_inputs))
+        f"$input{i}: CreateUpdateColumnInput!"
+        for i in range(len(column_inputs))
     )
     query = f"mutation({var_defs}) {{\n{aliases}\n}}"
 
@@ -501,11 +521,15 @@ def upload_columns_from_sheet(
             # fails the WHOLE column. Retry once without the FK so the column is
             # still created — matching the "silently skip the FK" contract.
             if "directoryPrimaryKey" in inp:
-                retry_inputs.append({k: v for k, v in inp.items() if k != "directoryPrimaryKey"})
+                retry_inputs.append(
+                    {k: v for k, v in inp.items() if k != "directoryPrimaryKey"}
+                )
             else:
                 errors.append({"name": name, "error": payload["errors"]})
         elif payload.get("column"):
-            created.append({"name": name, "id": _strip_id(payload["column"]["id"])})
+            created.append(
+                {"name": name, "id": _strip_id(payload["column"]["id"])}
+            )
         else:
             errors.append({"name": name, "error": "no column returned"})
 
@@ -521,17 +545,34 @@ def upload_columns_from_sheet(
             if pay.get("errors"):
                 errors.append({"name": inp["name"], "error": pay["errors"]})
             elif pay.get("column"):
-                created.append({
-                    "name": inp["name"],
-                    "id": _strip_id(pay["column"]["id"]),
-                    "note": "created without directoryPrimaryKey (FK rejected)",
-                })
+                created.append(
+                    {
+                        "name": inp["name"],
+                        "id": _strip_id(pay["column"]["id"]),
+                        "note": "created without directoryPrimaryKey (FK rejected)",
+                    }
+                )
             else:
-                errors.append({"name": inp["name"], "error": "no column returned on retry"})
+                errors.append(
+                    {
+                        "name": inp["name"],
+                        "error": "no column returned on retry",
+                    }
+                )
         except Exception as e:
-            errors.append({"name": inp["name"], "error": f"retry without directoryPrimaryKey failed: {e}"})
+            errors.append(
+                {
+                    "name": inp["name"],
+                    "error": f"retry without directoryPrimaryKey failed: {e}",
+                }
+            )
 
-    return {"created": len(created), "columns": created, "errors": errors, "skipped": skipped}
+    return {
+        "created": len(created),
+        "columns": created,
+        "errors": errors,
+        "skipped": skipped,
+    }
 
 
 def _fetch_table_columns(table_id: str, env: str) -> list[dict]:
@@ -620,22 +661,32 @@ def bulk_upsert_columns(
     import re
 
     if bool(architecture_url.strip()) == bool(columns_json.strip()):
-        raise ValueError("Provide exactly one of architecture_url or columns_json.")
+        raise ValueError(
+            "Provide exactly one of architecture_url or columns_json."
+        )
 
     # --- load source rows -------------------------------------------------
     if architecture_url.strip():
         match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", architecture_url)
         if not match:
-            raise ValueError(f"Cannot extract sheet ID from URL: {architecture_url}")
+            raise ValueError(
+                f"Cannot extract sheet ID from URL: {architecture_url}"
+            )
         csv_url = f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv"
         resp = requests.get(csv_url, timeout=30, allow_redirects=True)
         if not resp.ok:
-            raise RuntimeError(f"Failed to download sheet CSV: HTTP {resp.status_code}")
-        rows: list[dict] = list(csv.DictReader(io.StringIO(resp.content.decode("utf-8"))))
+            raise RuntimeError(
+                f"Failed to download sheet CSV: HTTP {resp.status_code}"
+            )
+        rows: list[dict] = list(
+            csv.DictReader(io.StringIO(resp.content.decode("utf-8")))
+        )
     else:
         rows = json.loads(columns_json)
         if not isinstance(rows, list):
-            raise ValueError("columns_json must be a JSON list of column dicts.")
+            raise ValueError(
+                "columns_json must be a JSON list of column dicts."
+            )
 
     def _get(row: dict, *keys: str) -> str:
         for k in keys:
@@ -751,7 +802,11 @@ def bulk_upsert_columns(
 
         inputs.append(fields)
         actions.append(
-            {"name": name, "action": "update" if is_update else "create", "sets": set_fields}
+            {
+                "name": name,
+                "action": "update" if is_update else "create",
+                "sets": set_fields,
+            }
         )
 
     result: dict[str, Any] = {
@@ -787,7 +842,9 @@ def bulk_upsert_columns(
             f"{{ errors {{ field messages }} column {{ id name }} }}"
             for i in range(len(batch))
         )
-        var_defs = ", ".join(f"$input{i}: CreateUpdateColumnInput!" for i in range(len(batch)))
+        var_defs = ", ".join(
+            f"$input{i}: CreateUpdateColumnInput!" for i in range(len(batch))
+        )
         query = f"mutation({var_defs}) {{\n{aliases}\n}}"
         r = requests.post(
             f"{base_url}/graphql",
@@ -806,9 +863,18 @@ def bulk_upsert_columns(
                 # A rejected directoryPrimaryKey fails the whole column; retry
                 # once without the FK (mirrors upload_columns_from_sheet).
                 if "directoryPrimaryKey" in inp:
-                    retry = {k: v for k, v in inp.items() if k != "directoryPrimaryKey"}
+                    retry = {
+                        k: v
+                        for k, v in inp.items()
+                        if k != "directoryPrimaryKey"
+                    }
                     try:
-                        rr = _mut("CreateUpdateColumn", retry, "column { id name }", env=env)
+                        rr = _mut(
+                            "CreateUpdateColumn",
+                            retry,
+                            "column { id name }",
+                            env=env,
+                        )
                         if rr.get("column"):
                             if "id" in inp:
                                 updated += 1
@@ -816,7 +882,12 @@ def bulk_upsert_columns(
                                 created += 1
                             continue
                     except Exception as e:
-                        errors.append({"name": inp["name"], "error": f"retry w/o FK failed: {e}"})
+                        errors.append(
+                            {
+                                "name": inp["name"],
+                                "error": f"retry w/o FK failed: {e}",
+                            }
+                        )
                         continue
                 errors.append({"name": inp["name"], "error": payload["errors"]})
             elif payload.get("column"):
@@ -825,11 +896,13 @@ def bulk_upsert_columns(
                 else:
                     created += 1
             else:
-                errors.append({"name": inp["name"], "error": "no column returned"})
+                errors.append(
+                    {"name": inp["name"], "error": "no column returned"}
+                )
 
     bs = max(1, min(int(batch_size), 100))
     for start in range(0, len(inputs), bs):
-        _run_batch(inputs[start:start + bs])
+        _run_batch(inputs[start : start + bs])
 
     result["updated"] = updated
     result["created"] = created
@@ -1290,9 +1363,7 @@ def create_update_update(
     Returns: {"id": str}
     """
     if (table_id is None) == (raw_data_source_id is None):
-        raise ValueError(
-            "pass exactly one of table_id or raw_data_source_id"
-        )
+        raise ValueError("pass exactly one of table_id or raw_data_source_id")
 
     fields: dict[str, Any] = {
         "entity": entity_id,
@@ -1352,11 +1423,13 @@ def get_raw_data_sources(dataset_slug: str, env: str = "dev") -> list[dict]:
     results = []
     for e in edges[0]["node"]["rawDataSources"]["edges"]:
         n = e["node"]
-        results.append({
-            "id": _strip_id(n["id"]),
-            "name": n.get("name", ""),
-            "url": n.get("url", ""),
-        })
+        results.append(
+            {
+                "id": _strip_id(n["id"]),
+                "name": n.get("name", ""),
+                "url": n.get("url", ""),
+            }
+        )
     return results
 
 
@@ -1435,7 +1508,9 @@ def create_update_raw_data_source(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateRawDataSource", fields, "rawdatasource { id }", env=env)
+    payload = _mut(
+        "CreateUpdateRawDataSource", fields, "rawdatasource { id }", env=env
+    )
     return {"id": _strip_id(payload["rawdatasource"]["id"])}
 
 
@@ -1554,7 +1629,9 @@ def create_update_organization(
     if id:
         fields["id"] = id
 
-    payload = _mut("CreateUpdateOrganization", fields, "organization { id slug }", env=env)
+    payload = _mut(
+        "CreateUpdateOrganization", fields, "organization { id slug }", env=env
+    )
     o = payload["organization"]
     return {"id": _strip_id(o["id"]), "slug": o["slug"]}
 
@@ -1585,7 +1662,9 @@ def _create_update_ref(
         fields.update({k: v for k, v in extra.items() if v not in (None, "")})
     if id:
         fields["id"] = id
-    payload = _mut(mutation_name, fields, f"{result_field} {{ id slug }}", env=env)
+    payload = _mut(
+        mutation_name, fields, f"{result_field} {{ id slug }}", env=env
+    )
     o = payload[result_field]
     return {"id": _strip_id(o["id"]), "slug": o["slug"]}
 
@@ -1616,8 +1695,15 @@ def create_update_license(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateLicense", "license", slug, name_pt, name_en, name_es,
-        id=id, extra={"url": url}, env=env,
+        "CreateUpdateLicense",
+        "license",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        extra={"url": url},
+        env=env,
     )
 
 
@@ -1638,8 +1724,14 @@ def create_update_availability(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateAvailability", "availability", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateAvailability",
+        "availability",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -1660,8 +1752,14 @@ def create_update_language(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateLanguage", "language", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateLanguage",
+        "language",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -1682,8 +1780,14 @@ def create_update_status(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateStatus", "status", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateStatus",
+        "status",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -1705,8 +1809,14 @@ def create_update_entity_category(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateEntityCategory", "entitycategory", slug, name_pt, name_en, name_es,
-        id=id, env=env,
+        "CreateUpdateEntityCategory",
+        "entitycategory",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -1732,8 +1842,15 @@ def create_update_entity(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateEntity", "entity", slug, name_pt, name_en, name_es,
-        id=id, extra={"category": category_id}, env=env,
+        "CreateUpdateEntity",
+        "entity",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        extra={"category": category_id},
+        env=env,
     )
 
 
@@ -1755,8 +1872,14 @@ def create_update_measurement_unit_category(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateMeasurementUnitCategory", "measurementunitcategory",
-        slug, name_pt, name_en, name_es, id=id, env=env,
+        "CreateUpdateMeasurementUnitCategory",
+        "measurementunitcategory",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        env=env,
     )
 
 
@@ -1786,8 +1909,17 @@ def create_update_area(
     Returns: {"id": str, "slug": str}
     """
     return _create_update_ref(
-        "CreateUpdateArea", "area", slug, name_pt, name_en, name_es, id=id,
-        extra={"administrativeLevel": administrative_level, "entity": entity_id,
-               "parent": parent_id},
+        "CreateUpdateArea",
+        "area",
+        slug,
+        name_pt,
+        name_en,
+        name_es,
+        id=id,
+        extra={
+            "administrativeLevel": administrative_level,
+            "entity": entity_id,
+            "parent": parent_id,
+        },
         env=env,
     )
