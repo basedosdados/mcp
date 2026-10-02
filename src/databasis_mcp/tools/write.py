@@ -5,7 +5,12 @@ import requests
 
 from .._app import mcp
 from ..auth import _get_token
-from ..gql import _gql, _lookup_directory_column, _mut, _strip_id
+from ..gql import (
+    _gql,
+    _mut,
+    _strip_id,
+    resolve_directory_column,
+)
 from .metadata import discover_ids
 
 # ---------------------------------------------------------------------------
@@ -422,6 +427,7 @@ def upload_columns_from_sheet(
     # Build one input dict per row
     column_inputs = []
     skipped = []
+    directory_errors: list[dict] = []
     for row in rows:
         name = row.get("name", "").strip()
         if not name:
@@ -473,14 +479,23 @@ def upload_columns_from_sheet(
 
         dir_col = row.get("directory_column", "").strip()
         if dir_col:
-            col_node_id = _lookup_directory_column(dir_col, env)
+            col_node_id, dir_err = resolve_directory_column(dir_col, env)
             if col_node_id:
                 fields["directoryPrimaryKey"] = col_node_id
+            else:
+                # Reported rather than dropped: a sheet whose directory_column
+                # never resolves otherwise uploads clean and links nothing.
+                directory_errors.append({"name": name, "error": dir_err})
 
         column_inputs.append(fields)
 
     if not column_inputs:
-        return {"created": 0, "columns": [], "errors": [], "skipped": skipped}
+        return {
+            "created": 0,
+            "columns": [],
+            "errors": list(directory_errors),
+            "skipped": skipped,
+        }
 
     # Batch all columns into a single GraphQL mutation request using aliases
     auth_header, base_url = _get_token(env)
@@ -570,7 +585,7 @@ def upload_columns_from_sheet(
     return {
         "created": len(created),
         "columns": created,
-        "errors": errors,
+        "errors": directory_errors + errors,
         "skipped": skipped,
     }
 
@@ -590,6 +605,36 @@ def _fetch_table_columns(table_id: str, env: str) -> list[dict]:
         auth=False,
     )
     return [e["node"] for e in data["allColumn"]["edges"]]
+
+
+# Every key `bulk_upsert_columns` understands in a `columns_json` row or an
+# architecture-sheet header. Anything else is reported back to the caller rather
+# than dropped, so a typo like `directory_column_name` (which is
+# `update_column`'s parameter, not this one's) cannot pass for success.
+_KNOWN_COLUMN_KEYS: frozenset[str] = frozenset(
+    {
+        "name",
+        "bigquery_type",
+        "description",
+        "description_pt",
+        "description_en",
+        "description_es",
+        "observations",
+        "observations_pt",
+        "observations_en",
+        "observations_es",
+        "covered_by_dictionary",
+        "measurement_unit",
+        "has_sensitive_data",
+        "directory_column",
+        "is_partition",
+        "is_primary_key",
+        # Colunas que as planilhas de arquitetura carregam e que não viram campo
+        # do backend; aceitas em silêncio para não poluir o relatório.
+        "temporal_coverage",
+        "original_name",
+    }
+)
 
 
 @mcp.tool()
@@ -626,7 +671,7 @@ def bulk_upsert_columns(
            "observations_pt": "Topo codificado em 90 a partir de 2011.",
            "observations_en": "Top-coded at 90 from 2011 on.",
            "observations_es": "Tope codificado en 90 a partir de 2011.",
-           "bigquery_type": "INT64"}]'
+           "is_partition": false, "bigquery_type": "INT64"}]'
 
     `observations` is the column's free-text notes field (source quirks,
     caveats). It is per-language like `description`: `observations_pt`,
@@ -636,10 +681,21 @@ def bulk_upsert_columns(
     columns ended up PT-only. Pass all three.
 
     Only fields present (non-empty) for a row are written; omitted fields are
-    left untouched — no accidental blanking, and partition/primary-key flags are
-    never clobbered. Rows whose name already exists are UPDATED; new names are
+    left untouched — no accidental blanking. `is_partition` and `is_primary_key`
+    are opt-in the same way: pass the key to set the flag, omit it to leave the
+    stored value alone, so they are never clobbered by a caller who does not
+    mention them. Rows whose name already exists are UPDATED; new names are
     CREATED unless update_only=True (then reported under skipped_not_on_table).
     Idempotent: safe to re-run.
+
+    Two kinds of silent failure are now reported in `errors` instead of being
+    dropped: a key the tool does not recognise (a typo such as
+    `directory_column_name`, which belongs to `update_column`, not here), and a
+    `directory_column` that cannot be resolved — including the common case of a
+    target that exists but is not flagged as a primary key of a directory table,
+    which the backend otherwise rejects with an unhelpful
+    "Faça uma escolha válida". The error says which keys of that directory are
+    eligible.
 
     Args:
         table_id: bare table ID
@@ -727,8 +783,26 @@ def bulk_upsert_columns(
     skipped_not_on_table: list[str] = []
     unchanged: list[str] = []
 
+    row_errors: list[dict] = []
+
     for row in named_rows:
         name = _get(row, "name")
+
+        # An unrecognised key used to be dropped without a word, so a caller who
+        # wrote `directory_column_name` (update_column's parameter) instead of
+        # `directory_column` got a silent no-op and no way to tell.
+        unknown = sorted(k for k in row if k not in _KNOWN_COLUMN_KEYS)
+        if unknown:
+            row_errors.append(
+                {
+                    "name": name,
+                    "error": (
+                        f"unknown key(s) {unknown} — ignored. Valid keys: "
+                        f"{sorted(_KNOWN_COLUMN_KEYS)}"
+                    ),
+                }
+            )
+
         col_id = name_to_id.get(name)
         is_update = col_id is not None
         if not is_update and update_only:
@@ -783,10 +857,27 @@ def bulk_upsert_columns(
 
         dir_col = _get(row, "directory_column")
         if dir_col:
-            fk = _lookup_directory_column(dir_col, env)
+            fk, dir_err = resolve_directory_column(dir_col, env)
             if fk:
                 fields["directoryPrimaryKey"] = fk
                 set_fields.append("directoryPrimaryKey")
+            else:
+                # Previously dropped in silence, which is how a whole dataset can
+                # end up with no directory links and a clean-looking result.
+                row_errors.append({"name": name, "error": dir_err})
+
+        # `is_partition` and `is_primary_key` are opt-in: absent keys are left
+        # untouched, so the "never clobbered" guarantee still holds, but a bulk
+        # caller no longer needs a separate update_column per partition column.
+        part = _truthy(row, "is_partition")
+        if part is not None:
+            fields["isPartition"] = part
+            set_fields.append("isPartition")
+
+        pk = _truthy(row, "is_primary_key")
+        if pk is not None:
+            fields["isPrimaryKey"] = pk
+            set_fields.append("isPrimaryKey")
 
         if not is_update:
             bq_type_name = _get(row, "bigquery_type") or "STRING"
@@ -816,7 +907,7 @@ def bulk_upsert_columns(
         "created": 0,
         "skipped_not_on_table": skipped_not_on_table,
         "unchanged_no_fields": unchanged,
-        "errors": [],
+        "errors": list(row_errors),
         "dry_run": dry_run,
     }
 
@@ -832,7 +923,7 @@ def bulk_upsert_columns(
     auth_header, base_url = _get_token(env)
     updated = 0
     created = 0
-    errors: list[dict] = []
+    errors: list[dict] = list(row_errors)
 
     def _run_batch(batch: list[dict]) -> None:
         nonlocal updated, created
@@ -996,11 +1087,18 @@ def update_column(
     # Resolve the BD directories FK (e.g. "br_bd_diretorios_us.state:id_state")
     # to the target column node id and set it. The backend only accepts a target
     # whose column is is_primary_key=True and whose table is is_directory=True
-    # (limit_choices_to); if the lookup misses, the FK is silently skipped.
+    # (limit_choices_to). A miss used to be skipped in silence, so the call
+    # reported success while the FK was never written; now it raises with the
+    # reason, and the caller can decide.
     if directory_column_name:
-        directory_pk_id = _lookup_directory_column(directory_column_name, env)
-        if directory_pk_id:
-            fields["directoryPrimaryKey"] = directory_pk_id
+        directory_pk_id, directory_err = resolve_directory_column(
+            directory_column_name, env
+        )
+        if not directory_pk_id:
+            raise ValueError(
+                f"directory_column_name not applied: {directory_err}"
+            )
+        fields["directoryPrimaryKey"] = directory_pk_id
 
     payload = _mut("CreateUpdateColumn", fields, "column { id name }", env=env)
     col = payload["column"]
