@@ -124,6 +124,10 @@ entidades no backend da Base dos Dados.
 | `create_update_entity_category`           | Cria ou atualiza categoria de entidade                 |
 | `create_update_measurement_unit_category` | Cria ou atualiza categoria de unidade de medida        |
 | `create_update_area`                      | Cria ou atualiza área de cobertura espacial            |
+| `create_update_researcher`                | Cria ou atualiza pesquisador(a)                        |
+| `create_update_invited_researcher_term`   | Cria ou atualiza mandato de Pesquisador Convidado      |
+| `create_update_journal`                   | Cria ou atualiza periódico                             |
+| `create_update_research_paper`            | Cria ou atualiza artigo científico                     |
 | `reorder_tables`                          | Define a ordem de exibição das tabelas em um conjunto  |
 | `reorder_observation_levels`              | Define a ordem de exibição dos níveis de observação    |
 | `reorder_columns`                         | Define a ordem de exibição das colunas                 |

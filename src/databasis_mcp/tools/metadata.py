@@ -168,6 +168,8 @@ _CATEGORY_QUERY_MAP = {
     "availability": ("allAvailability", "id slug namePt"),
     "status": ("allStatus", "id slug"),
     "area": ("allArea", "id slug"),
+    "researcher": ("allResearcher", "id slug name"),
+    "journal": ("allJournal", "id slug name"),
 }
 
 
@@ -181,7 +183,8 @@ def lookup_id(category: str, slug: str, env: str = "dev") -> dict:
 
     Args:
         category: one of organization, theme, tag, entity, entity_category,
-                  language, measurement_unit_category, license, availability, status, area
+                  language, measurement_unit_category, license, availability, status, area,
+                  researcher, journal
         slug: the slug to look up, e.g. "mma", "environment", "conservacao", "br"
         env: "dev" or "prod"
 
