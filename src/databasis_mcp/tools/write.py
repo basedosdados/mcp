@@ -1923,3 +1923,244 @@ def create_update_area(
         },
         env=env,
     )
+
+
+# ---------------------------------------------------------------------------
+# Researchers, invited researcher terms, journals and research papers
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def create_update_researcher(
+    slug: str,
+    name: str,
+    id: str | None = None,
+    position_pt: str = "",
+    position_en: str = "",
+    position_es: str = "",
+    description_pt: str = "",
+    description_en: str = "",
+    description_es: str = "",
+    affiliation_ids: list[str] | None = None,
+    phd_institution_id: str | None = None,
+    phd_year: int | None = None,
+    email: str = "",
+    website: str = "",
+    linkedin: str = "",
+    google_scholar: str = "",
+    lattes: str = "",
+    orcid: str = "",
+    theme_ids: list[str] | None = None,
+    account_id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a researcher record.
+
+    Pass id to update an existing record; omit to create new. On update, only
+    the fields passed are changed.
+
+    Args:
+        name: full name, not translated.
+        position_*: current position per language, e.g. "Assistant Professor".
+        description_*: short blurb shown on the Invited Researchers page.
+        affiliation_ids: Organization IDs (ManyToMany) — use lookup_id("organization", slug)
+            and create_update_organization when a university is missing.
+        phd_institution_id: a single Organization ID.
+        email: PUBLIC contact email — it is shown on the website. Leave empty otherwise.
+        orcid: ORCID iD, e.g. "0000-0002-1825-0097".
+        theme_ids: Theme IDs used as broad research fields.
+        account_id: integer ID of the researcher's Data Basis user account, if any.
+
+    Fill all three languages for position and description: the backend copies
+    the first value into empty languages, so a pt-only entry shows Portuguese
+    on the en/es sites.
+
+    Returns: {"id": str, "slug": str}
+    """
+    fields: dict[str, Any] = {"slug": slug, "name": name}
+    optional = {
+        "positionPt": position_pt,
+        "positionEn": position_en,
+        "positionEs": position_es,
+        "descriptionPt": description_pt,
+        "descriptionEn": description_en,
+        "descriptionEs": description_es,
+        "phdInstitution": phd_institution_id,
+        "phdYear": phd_year,
+        "email": email,
+        "website": website,
+        "linkedin": linkedin,
+        "googleScholar": google_scholar,
+        "lattes": lattes,
+        "orcid": orcid,
+        "account": account_id,
+    }
+    fields.update({k: v for k, v in optional.items() if v not in (None, "")})
+    if position_pt:
+        fields["position"] = position_pt
+    if description_pt:
+        fields["description"] = description_pt
+    if affiliation_ids is not None:
+        fields["affiliations"] = affiliation_ids
+    if theme_ids is not None:
+        fields["themes"] = theme_ids
+    if id:
+        fields["id"] = id
+
+    payload = _mut(
+        "CreateUpdateResearcher", fields, "researcher { id slug }", env=env
+    )
+    r = payload["researcher"]
+    return {"id": _strip_id(r["id"]), "slug": r["slug"]}
+
+
+@mcp.tool()
+def create_update_invited_researcher_term(
+    researcher_id: str,
+    start_at: str,
+    cohort: str = "",
+    end_at: str = "",
+    id: str | None = None,
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update an Invited Researcher term (one row per 2-year term).
+
+    Pass id to update an existing record; omit to create new. A renewal is a
+    new term, not an update of the previous one.
+
+    Args:
+        researcher_id: Researcher ID (from create_update_researcher or lookup_id).
+        start_at: date of entry, "YYYY-MM-DD".
+        cohort: year and semester of the selection, e.g. "2027.1".
+        end_at: date of exit, "YYYY-MM-DD". Leave empty to default to start + 2 years.
+
+    Returns: {"id": str, "cohort": str | None, "start_at": str, "end_at": str}
+    """
+    fields: dict[str, Any] = {"researcher": researcher_id, "startAt": start_at}
+    if cohort:
+        fields["cohort"] = cohort
+    if end_at:
+        fields["endAt"] = end_at
+    if id:
+        fields["id"] = id
+
+    payload = _mut(
+        "CreateUpdateInvitedResearcherTerm",
+        fields,
+        "invitedresearcherterm { id cohort startAt endAt }",
+        env=env,
+    )
+    t = payload["invitedresearcherterm"]
+    return {
+        "id": _strip_id(t["id"]),
+        "cohort": t["cohort"],
+        "start_at": t["startAt"],
+        "end_at": t["endAt"],
+    }
+
+
+@mcp.tool()
+def create_update_journal(
+    slug: str,
+    name: str,
+    id: str | None = None,
+    abbreviation: str = "",
+    issn: str = "",
+    eissn: str = "",
+    publisher: str = "",
+    website: str = "",
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a journal record.
+
+    Pass id to update an existing record; omit to create new.
+
+    Returns: {"id": str, "slug": str}
+    """
+    fields: dict[str, Any] = {"slug": slug, "name": name}
+    optional = {
+        "abbreviation": abbreviation,
+        "issn": issn,
+        "eissn": eissn,
+        "publisher": publisher,
+        "website": website,
+    }
+    fields.update({k: v for k, v in optional.items() if v})
+    if id:
+        fields["id"] = id
+
+    payload = _mut(
+        "CreateUpdateJournal", fields, "journal { id slug }", env=env
+    )
+    j = payload["journal"]
+    return {"id": _strip_id(j["id"]), "slug": j["slug"]}
+
+
+@mcp.tool()
+def create_update_research_paper(
+    title: str,
+    authors: str,
+    id: str | None = None,
+    researcher_ids: list[str] | None = None,
+    dataset_ids: list[str] | None = None,
+    journal_id: str | None = None,
+    publication_status: str = "",
+    year: int | None = None,
+    volume: str = "",
+    issue: str = "",
+    pages: str = "",
+    doi: str = "",
+    url: str = "",
+    google_scholar: str = "",
+    abstract: str = "",
+    env: str = "dev",
+) -> dict:
+    """
+    Create or update a research paper record.
+
+    Pass id to update an existing record; omit to create new. On update, only
+    the fields passed are changed.
+
+    Args:
+        authors: full author list as cited, e.g. "Silva, A. and Souza, B.".
+        researcher_ids: Researcher IDs of authors registered as researchers.
+        dataset_ids: Dataset IDs related to the paper (built from it or using it);
+            the paper then appears in the dataset page's Research Papers tab.
+        journal_id: Journal ID (create_update_journal / lookup_id("journal", slug)).
+        publication_status: "published" (default), "forthcoming" or "working_paper".
+        doi: bare DOI ("10.1257/aer.20190001"); "https://doi.org/" prefixes are stripped.
+
+    Returns: {"id": str, "title": str}
+    """
+    fields: dict[str, Any] = {"title": title, "authors": authors}
+    optional = {
+        "journal": journal_id,
+        "publicationStatus": publication_status,
+        "year": year,
+        "volume": volume,
+        "issue": issue,
+        "pages": pages,
+        "doi": doi,
+        "url": url,
+        "googleScholar": google_scholar,
+        "abstract": abstract,
+    }
+    fields.update({k: v for k, v in optional.items() if v not in (None, "")})
+    if researcher_ids is not None:
+        fields["researchers"] = researcher_ids
+    if dataset_ids is not None:
+        fields["datasets"] = dataset_ids
+    if id:
+        fields["id"] = id
+
+    payload = _mut(
+        "CreateUpdateResearchPaper",
+        fields,
+        "researchpaper { id title }",
+        env=env,
+    )
+    p = payload["researchpaper"]
+    return {"id": _strip_id(p["id"]), "title": p["title"]}
