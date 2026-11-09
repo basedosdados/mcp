@@ -1952,6 +1952,7 @@ def create_update_researcher(
     orcid: str = "",
     theme_ids: list[str] | None = None,
     account_id: str | None = None,
+    status_id: str | None = None,
     env: str = "dev",
 ) -> dict:
     """
@@ -1971,6 +1972,9 @@ def create_update_researcher(
         orcid: ORCID iD, e.g. "0000-0002-1825-0097".
         theme_ids: Theme IDs used as broad research fields.
         account_id: integer ID of the researcher's Data Basis user account, if any.
+        status_id: Status ID. Use lookup_id("status", "under_review") to hide the
+            researcher from the website (e.g. before a cohort is announced); pass
+            the "published" status ID to show it again.
 
     Fill all three languages for position and description: the backend copies
     the first value into empty languages, so a pt-only entry shows Portuguese
@@ -1995,6 +1999,7 @@ def create_update_researcher(
         "lattes": lattes,
         "orcid": orcid,
         "account": account_id,
+        "status": status_id,
     }
     fields.update({k: v for k, v in optional.items() if v not in (None, "")})
     if position_pt:
