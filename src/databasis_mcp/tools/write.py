@@ -6,11 +6,31 @@ import requests
 from .._app import mcp
 from ..auth import _get_token
 from ..gql import _gql, _lookup_directory_column, _mut, _strip_id
-from .metadata import discover_ids
+from .metadata import discover_ids, lookup_id
 
 # ---------------------------------------------------------------------------
 # MCP tools — write (create/update/delete)
 # ---------------------------------------------------------------------------
+
+# coverage_entity slugs and write order (backend rejects month/quarter/bimester before year)
+COVERAGE_ENTITY_ORDER = {
+    "year": 0,
+    "date": 0,
+    "month": 1,
+    "quarter": 1,
+    "bimester": 1,
+}
+
+
+def _coverage_entity_id(slug: str, env: str) -> str:
+    """resolve a coverage_entity slug to its entity id in `env`."""
+    slug = slug.strip().lower()
+    if slug not in COVERAGE_ENTITY_ORDER:
+        raise ValueError(
+            f"Invalid coverage_entity {slug!r}. "
+            f"Valid: {sorted(COVERAGE_ENTITY_ORDER)}"
+        )
+    return lookup_id(category="entity", slug=slug, env=env)["id"]
 
 
 @mcp.tool()
@@ -617,7 +637,8 @@ def bulk_upsert_columns(
         `description_en`, `description_es`, `observations_pt`,
         `observations_en`, `observations_es` columns. A bare `description` or
         `observations` column is used as Portuguese when the `_pt` variant is
-        absent.
+        absent. An OPTIONAL `coverage_entity` column marks the table's
+        temporal columns (see below).
       - columns_json: a JSON list of column dicts, e.g.
         '[{"name": "age", "description_pt": "Idade", "description_en": "Age",
            "description_es": "Edad", "covered_by_dictionary": true,
@@ -635,6 +656,15 @@ def bulk_upsert_columns(
     working — but they leave EN and ES blank, which is how 3,022 production
     columns ended up PT-only. Pass all three.
 
+    `coverage_entity` marks the column's temporal role in the table's coverage
+    (`Column.coverage_entity`): one of "year", "month", "quarter", "bimester",
+    "date". The pipelines read the table's coverage spec from these marks, and
+    an unmarked temporal table is treated as non_historical. Mark only the
+    columns of the temporal grain: `year` alone, `date` alone, or `year` plus
+    one of month/quarter/bimester. These are written in a second pass, after
+    every other field, with `year`/`date` before the rest — the backend rejects
+    `month` on a table whose `year` column is not marked yet.
+
     Only fields present (non-empty) for a row are written; omitted fields are
     left untouched — no accidental blanking, and partition/primary-key flags are
     never clobbered. Rows whose name already exists are UPDATED; new names are
@@ -651,7 +681,8 @@ def bulk_upsert_columns(
         batch_size: columns per GraphQL request (aliased batch), 1-100
 
     Returns (compact — never dumps every column):
-      {"updated": int, "created": int, "skipped_not_on_table": [str],
+      {"updated": int, "created": int, "coverage_entity_set": int,
+       "skipped_not_on_table": [str],
        "unchanged_no_fields": [str], "errors": [{"name", "error"}],
        "source_rows": int, "table_columns": int, "dry_run": bool,
        "planned_writes": int, "plan": [...]  (last two only when dry_run)}
@@ -726,6 +757,8 @@ def bulk_upsert_columns(
     actions: list[dict] = []
     skipped_not_on_table: list[str] = []
     unchanged: list[str] = []
+    # (name, slug) pairs, written after the main pass in backend-valid order
+    coverage_marks: list[tuple[str, str]] = []
 
     for row in named_rows:
         name = _get(row, "name")
@@ -734,6 +767,15 @@ def bulk_upsert_columns(
         if not is_update and update_only:
             skipped_not_on_table.append(name)
             continue
+
+        ce = _get(row, "coverage_entity").lower()
+        if ce:
+            if ce not in COVERAGE_ENTITY_ORDER:
+                raise ValueError(
+                    f"Column {name!r}: invalid coverage_entity {ce!r}. "
+                    f"Valid: {sorted(COVERAGE_ENTITY_ORDER)}"
+                )
+            coverage_marks.append((name, ce))
 
         fields: dict[str, Any] = {"name": name, "table": table_id}
         if is_update:
@@ -797,7 +839,8 @@ def bulk_upsert_columns(
 
         # An existing column with no fields to set would be pure churn — skip it.
         if is_update and not set_fields:
-            unchanged.append(name)
+            if not ce:
+                unchanged.append(name)
             continue
 
         inputs.append(fields)
@@ -809,11 +852,14 @@ def bulk_upsert_columns(
             }
         )
 
+    coverage_marks.sort(key=lambda m: COVERAGE_ENTITY_ORDER[m[1]])
+
     result: dict[str, Any] = {
         "source_rows": len(named_rows),
         "table_columns": len(existing),
         "updated": 0,
         "created": 0,
+        "coverage_entity_set": 0,
         "skipped_not_on_table": skipped_not_on_table,
         "unchanged_no_fields": unchanged,
         "errors": [],
@@ -821,11 +867,17 @@ def bulk_upsert_columns(
     }
 
     if dry_run:
-        result["planned_writes"] = len(inputs)
-        result["plan"] = actions[:200]
+        result["planned_writes"] = len(inputs) + len(coverage_marks)
+        result["plan"] = (
+            actions
+            + [
+                {"name": n, "action": "coverage_entity", "sets": [s]}
+                for n, s in coverage_marks
+            ]
+        )[:200]
         return result
 
-    if not inputs:
+    if not inputs and not coverage_marks:
         return result
 
     # --- execute in aliased batches (per-alias errors are isolated) -------
@@ -904,8 +956,46 @@ def bulk_upsert_columns(
     for start in range(0, len(inputs), bs):
         _run_batch(inputs[start : start + bs])
 
+    # --- coverage_entity pass: one save per column, year/date first -------
+    coverage_set = 0
+    if coverage_marks:
+        # re-read ids so columns created above are included
+        name_to_id = {
+            c["name"]: _strip_id(c["id"])
+            for c in _fetch_table_columns(table_id, env)
+        }
+        entity_ids: dict[str, str] = {}
+        for name, slug in coverage_marks:
+            col_id = name_to_id.get(name)
+            if not col_id:
+                errors.append(
+                    {
+                        "name": name,
+                        "error": "coverage_entity: column not on table",
+                    }
+                )
+                continue
+            try:
+                if slug not in entity_ids:
+                    entity_ids[slug] = _coverage_entity_id(slug, env)
+                _mut(
+                    "CreateUpdateColumn",
+                    {
+                        "id": col_id,
+                        "name": name,
+                        "table": table_id,
+                        "coverageEntity": entity_ids[slug],
+                    },
+                    "column { id name }",
+                    env=env,
+                )
+                coverage_set += 1
+            except Exception as e:
+                errors.append({"name": name, "error": f"coverage_entity: {e}"})
+
     result["updated"] = updated
     result["created"] = created
+    result["coverage_entity_set"] = coverage_set
     result["errors"] = errors
     return result
 
@@ -930,6 +1020,8 @@ def update_column(
     observations_pt: str = "",
     observations_en: str = "",
     observations_es: str = "",
+    coverage_entity: str = "",
+    clear_coverage_entity: bool = False,
     env: str = "dev",
 ) -> dict:
     """
@@ -956,6 +1048,14 @@ def update_column(
             description fields, these are three separate columns on the
             backend, and a language left empty is blank on the site for those
             readers — pass all three whenever the column has notes.
+        coverage_entity: the column's temporal role in the table's coverage —
+            "year", "month", "quarter", "bimester" or "date". The pipelines
+            read the table's coverage spec from these marks; an unmarked
+            temporal table is treated as non_historical. Valid per table:
+            `year` alone, `date` alone, or `year` plus one of
+            month/quarter/bimester. Mark the `year` column FIRST — the backend
+            rejects `month` while no `year` is marked. Empty leaves it alone.
+        clear_coverage_entity: when True, removes the coverage_entity mark
         env: "dev" or "prod"
 
     Returns: {"id": str, "name": str}
@@ -975,6 +1075,10 @@ def update_column(
         fields["observationLevel"] = None
     elif observation_level_id:
         fields["observationLevel"] = observation_level_id
+    if clear_coverage_entity:
+        fields["coverageEntity"] = None
+    elif coverage_entity:
+        fields["coverageEntity"] = _coverage_entity_id(coverage_entity, env)
     if description_pt:
         fields["descriptionPt"] = description_pt
     if description_en:
@@ -1225,8 +1329,8 @@ def create_update_coverage(
             data. A table paywalling a rolling window needs two coverages: the
             free one (is_closed=False) and the pro one (is_closed=True), which
             is what `Table.contains_closed_data` keys the Pro badge off, and
-            what the pipelines' `PartBdpro` coverage spec requires to exist
-            before it will run. Omit to leave the current value untouched, so a
+            what makes the backend's coverageSpec report tier=part_bdpro for
+            the pipelines. Omit to leave the current value untouched, so a
             routine update cannot silently un-paywall data.
         id: bare coverage ID if updating
         env: "dev" or "prod"

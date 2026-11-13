@@ -104,7 +104,7 @@ entidades no backend da Base dos Dados.
 | `create_update_dataset`                   | Cria ou atualiza conjunto                              |
 | `create_update_table`                     | Cria ou atualiza tabela                                |
 | `upload_columns_from_sheet`               | Registra colunas a partir de planilha do Google Sheets |
-| `update_column`                           | Atualiza coluna individual                             |
+| `update_column`                           | Atualiza coluna individual e `coverage_entity`         |
 | `delete_column`                           | Remove coluna                                          |
 | `delete_table`                            | Remove tabela                                          |
 | `create_update_observation_level`         | Cria ou atualiza nível de observação                   |
