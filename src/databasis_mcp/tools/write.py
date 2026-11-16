@@ -1387,7 +1387,8 @@ def create_update_datetime_range(
         start_day: 1-31; required for daily tables
         end_day: 1-31; required for daily tables
         interval: years between observations (1 = annual)
-        is_closed: True if the series has ended
+        is_closed: match the range's coverage — True on the pro (BD Pro)
+            range, False on the free one. The pipelines never write it.
         id: bare datetime range ID if updating
         env: "dev" or "prod"
 
