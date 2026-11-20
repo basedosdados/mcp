@@ -8,7 +8,9 @@ mcp = FastMCP(
         "require no authentication. "
         "BigQuery tools (query_bigquery, preview_table) require GCP ADC credentials and a billing project. "
         "Write tools are idempotent: pass an existing id to update, omit it to create. "
-        "Write tools require backend credentials — call auth first or rely on auto-auth."
+        "Write tools require backend credentials — call auth first or rely on auto-auth. "
+        "Temporal tables need coverage_entity on their date columns (update_column or "
+        "bulk_upsert_columns); check the result with get_coverage_spec."
     ),
 )
 

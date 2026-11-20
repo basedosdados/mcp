@@ -283,10 +283,11 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
         "tables": {
           "<table_slug>": {
             "id": str,
-            "columns": [{"id", "name"}],
+            "columns": [{"id", "name", "is_partition", "coverage_entity"}],
             "observation_levels": [{"id", "entity_id"}],
             "cloud_tables": [{"id"}],
-            "coverages": [{"id", "area_id", "area_slug", "datetime_ranges": [...]}],
+            "coverages": [{"id", "area_id", "area_slug", "is_closed",
+                           "datetime_ranges": [...]}],
             "updates": [{"id", "entity_id"}],
             "published_by": [{"id", "email"}],
             "data_cleaned_by": [{"id", "email"}],
@@ -313,7 +314,9 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                         edges {
                             node {
                                 id slug
-                                columns(first: 200) { edges { node { id name isPartition } } }
+                                columns(first: 200) {
+                                    edges { node { id name isPartition coverageEntity { slug } } }
+                                }
                                 observationLevels(first: 20) {
                                     edges { node { id entity { id slug } } }
                                 }
@@ -321,11 +324,15 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                                 coverages(first: 10) {
                                     edges {
                                         node {
-                                            id
+                                            id isClosed
                                             area { id slug }
                                             datetimeRanges(first: 10) {
                                                 edges {
-                                                    node { id startYear endYear interval }
+                                                    node {
+                                                        id startYear startMonth startDay
+                                                        endYear endMonth endDay
+                                                        interval isClosed
+                                                    }
                                                 }
                                             }
                                         }
@@ -374,6 +381,9 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                     "id": _strip_id(c["node"]["id"]),
                     "name": c["node"]["name"],
                     "is_partition": c["node"].get("isPartition") or False,
+                    "coverage_entity": (
+                        c["node"].get("coverageEntity") or {}
+                    ).get("slug"),
                 }
                 for c in t["columns"]["edges"]
             ],
@@ -407,12 +417,18 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
                     "area_slug": cov["node"]["area"]["slug"]
                     if cov["node"].get("area")
                     else None,
+                    "is_closed": cov["node"].get("isClosed") or False,
                     "datetime_ranges": [
                         {
                             "id": _strip_id(dtr["node"]["id"]),
                             "start_year": dtr["node"]["startYear"],
+                            "start_month": dtr["node"]["startMonth"],
+                            "start_day": dtr["node"]["startDay"],
                             "end_year": dtr["node"]["endYear"],
+                            "end_month": dtr["node"]["endMonth"],
+                            "end_day": dtr["node"]["endDay"],
                             "interval": dtr["node"]["interval"],
+                            "is_closed": dtr["node"].get("isClosed") or False,
                         }
                         for dtr in cov["node"]["datetimeRanges"]["edges"]
                     ],
@@ -464,6 +480,56 @@ def get_dataset(slug: str, env: str = "dev") -> dict:
             for t in ds["tags"]["edges"]
         ],
         "tables": tables,
+    }
+
+
+@mcp.tool()
+def get_coverage_spec(dataset_id: str, table_id: str, env: str = "dev") -> dict:
+    """
+    Return the coverage spec the pipelines read for a table (`coverageSpec`).
+
+    The backend derives it from the table's Coverages and the columns marked
+    with `coverage_entity`:
+      - tier: "all_free" (free Coverage only), "part_bdpro" (free + pro),
+        "all_bdpro" (pro only), "non_historical" (no column marked), or ""
+        (columns marked but no Coverage yet).
+      - date_column_kind: "year", "year_month", "year_quarter",
+        "year_bimester", "date", or "" when no column is marked.
+
+    A temporal table that comes back "non_historical" has unmarked columns:
+    its coverage ranges never move and no Row Access Policies are applied.
+
+    Args:
+        dataset_id: GCP dataset id (e.g. "br_ibge_ipca")
+        table_id: GCP table id (e.g. "mes_brasil")
+        env: "dev", "staging" or "prod"
+
+    Returns: {"found": bool, "tier": str, "date_column_kind": str,
+              "coverage_columns": [{"name", "entity"}]}
+    """
+    q = """
+    query($datasetId: String!, $tableId: String!) {
+        coverageSpec(datasetId: $datasetId, tableId: $tableId) {
+            tier dateColumnKind coverageColumns { name entity }
+        }
+    }
+    """
+    data = _gql(
+        q, {"datasetId": dataset_id, "tableId": table_id}, env=env, auth=False
+    )
+    spec = data["coverageSpec"]
+    if spec is None:
+        return {
+            "found": False,
+            "tier": None,
+            "date_column_kind": None,
+            "coverage_columns": [],
+        }
+    return {
+        "found": True,
+        "tier": spec["tier"],
+        "date_column_kind": spec["dateColumnKind"],
+        "coverage_columns": spec["coverageColumns"] or [],
     }
 
 

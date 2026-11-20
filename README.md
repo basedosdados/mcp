@@ -25,6 +25,7 @@ Permite buscar conjuntos e consultar metadados sem qualquer autenticação.
 | `search_datasets`      | Busca conjuntos por nome                                                   |
 | `list_datasets`        | Lista conjuntos, opcionalmente filtrado por organização                    |
 | `get_dataset`          | Retorna metadados completos de um conjunto, incluindo referências BigQuery |
+| `get_coverage_spec`    | Retorna o tier e as colunas temporais que os pipelines leem de uma tabela  |
 | `lookup_id`            | Busca ID de uma entidade de referência por slug                            |
 | `discover_ids`         | Resolve slugs → IDs de referência (áreas, entidades, etc.)                 |
 | `get_raw_data_sources` | Lista fontes brutas de um conjunto                                         |
@@ -104,12 +105,13 @@ entidades no backend da Base dos Dados.
 | `create_update_dataset`                   | Cria ou atualiza conjunto                              |
 | `create_update_table`                     | Cria ou atualiza tabela                                |
 | `upload_columns_from_sheet`               | Registra colunas a partir de planilha do Google Sheets |
-| `update_column`                           | Atualiza coluna individual                             |
+| `bulk_upsert_columns`                     | Cria ou atualiza colunas em lote, com `coverage_entity` |
+| `update_column`                           | Atualiza coluna individual e `coverage_entity`         |
 | `delete_column`                           | Remove coluna                                          |
 | `delete_table`                            | Remove tabela                                          |
 | `create_update_observation_level`         | Cria ou atualiza nível de observação                   |
 | `create_update_cloud_table`               | Cria ou atualiza referência BigQuery de uma tabela     |
-| `create_update_coverage`                  | Cria ou atualiza cobertura geográfica                  |
+| `create_update_coverage`                  | Cria ou atualiza cobertura; `is_closed` separa grátis e Pro |
 | `create_update_datetime_range`            | Cria ou atualiza intervalo temporal                    |
 | `create_update_update`                    | Cria ou atualiza metadados de atualização              |
 | `create_update_raw_data_source`           | Cria ou atualiza fonte de dados bruta                  |
@@ -134,6 +136,43 @@ entidades no backend da Base dos Dados.
 
 Todas as ferramentas de escrita são **idempotentes**: passe um `id` existente
 para atualizar, omita para criar.
+
+### Cobertura temporal
+
+Os pipelines leem a cobertura de cada tabela do backend (`get_coverage_spec`).
+Ela vem de duas coisas: as colunas marcadas com `coverage_entity` e as
+coberturas da tabela.
+
+1. Marque as colunas temporais com a chave `coverage_entity` em
+   `bulk_upsert_columns`, que já grava `year` antes de `month`, `quarter` ou
+   `bimester`. Com `update_column(coverage_entity=...)`, marque `year` primeiro
+   e repasse `is_partition`, que volta para `False` se omitido.
+
+   | Colunas da tabela  | `coverage_entity`  |
+   | ------------------ | ------------------ |
+   | `ano`              | `year`             |
+   | `ano`, `mes`       | `year`, `month`    |
+   | `ano`, `trimestre` | `year`, `quarter`  |
+   | `ano`, `bimestre`  | `year`, `bimester` |
+   | `data`             | `date`             |
+
+2. Crie as coberturas com `create_update_coverage`: só a grátis
+   (`is_closed=False`), ou a grátis e a Pro (`is_closed=True`) para tabela com
+   janela BD Pro.
+3. Crie os intervalos com `create_update_datetime_range`, com o mesmo
+   `is_closed` da cobertura.
+4. Confira com `get_coverage_spec`:
+
+   | `tier`           | Significa                                      |
+   | ---------------- | ---------------------------------------------- |
+   | `all_free`       | Só cobertura grátis                            |
+   | `part_bdpro`     | Grátis e Pro (janela recente fechada)          |
+   | `all_bdpro`      | Só cobertura Pro                               |
+   | `non_historical` | Nenhuma coluna marcada                         |
+   | `""`             | Colunas marcadas, mas sem cobertura cadastrada |
+
+Tabela temporal sem `coverage_entity` vira `non_historical` sem erro: os
+intervalos nunca são atualizados e as Row Access Policies não são aplicadas.
 
 ### Ferramentas Prefect
 
